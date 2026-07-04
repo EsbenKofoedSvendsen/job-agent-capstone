@@ -1,218 +1,112 @@
-# Job Agent — Local
+# Job Agent — an autonomous job-search concierge
 
-A self-contained version of your HireMe pipeline. One Node server, a local
-SQLite database, a real Chromium browser for scraping, and any one AI key
-(Anthropic or OpenAI). Runs locally or hosted (see Fly.io section).
+*Kaggle × Google "AI Agents: Intensive Vibe Coding" capstone — **Concierge Agents** track.*
 
-It does two things your old app couldn't:
+Job hunting is a grind of refreshing 70 career pages, skimming hundreds of
+irrelevant postings, and occasionally missing the one that mattered. Job Agent
+is a self-hosted, always-on agent system that does that grind for one person:
+it scrapes ~70 company career sources on a schedule, AI-scores every posting
+against the owner's résumé with a calibrated two-model cascade, presents the
+survivors on a three-tier board, and emails a digest when something genuinely
+strong appears. It runs 24/7 on a $5 VM and costs well under $1/day in
+LLM tokens — because most of the engineering in this repo is about *not*
+calling the model.
 
-1. **Scrapes fast.** The cloud version was throttled to concurrency `2` and one
-   source at a time to survive Cloudflare's request timeout, waited a fixed
-   2.5 s on every page, and made a separate AI call to score *every single job*.
-   This version runs with no such timeout, so it scrapes many sources
-   and pages in parallel, uses smart waits instead of fixed sleeps, blocks
-   images/fonts/CSS, dedupes in memory, and **scores jobs in batches** (10 per
-   AI call by default). In practice that's the difference between minutes and
-   tens of minutes.
-2. **Keeps your data.** An importer loads your existing Supabase export
-   (142 jobs, your profile, status history) straight into the local database.
+The entire system was **vibe-coded**: designed, built, debugged, and
+cost-optimized conversationally with an AI coding agent, over roughly two
+weeks of sessions.
 
----
+![Architecture](docs/architecture.svg)
 
-## 1. Requirements
+## Course-concept mapping
 
-- **macOS** with **Node.js 18.17+** (`node -v` to check; install from
-  <https://nodejs.org> if needed).
-- If `npm install` complains about building `better-sqlite3`, install Xcode
-  Command Line Tools once: `xcode-select --install`.
+| Course concept | Where it lives here |
+|---|---|
+| **Multi-agent system** | Four specialized model roles in a cost cascade: Haiku *extractor* (unstructured page text → jobs), Haiku *first-pass scorer* (batched, cached rubric), Sonnet *judge* (second opinion on scores > 70), Sonnet *tailor* (résumé/cover-letter rewrite on demand) — plus a Gemini-powered ADK concierge in [`adk-agent/`](adk-agent/) that fronts the whole system conversationally. |
+| **MCP server** | [`mcp-server/`](mcp-server/) exposes the live agent as Model Context Protocol tools (board, scoring, source health, cost telemetry) usable from Claude Desktop, Gemini CLI, or Antigravity. |
+| **Agent tools & interoperability** | 9 ATS JSON adapters (Greenhouse, Lever, Ashby, Workday, Oracle, Amazon, Eightfold, SmartRecruiters, Uber) + a Playwright browser path with XHR network capture for JS-gated career sites; REST API; Resend email. |
+| **Memory & state** | SQLite on a persistent volume: the job board, a 30-day negative-dedup reject cache, a model-disagreement log, per-source health, cost telemetry. The agent's judgment *and* its economics improve as state accumulates. |
+| **Evaluation & guardrails (Day 4)** | Structured outputs (JSON-schema-constrained responses), a golden-probe score tester, Sonnet-arbitrated false-negative audits, and disagreement mining that turns the judge's corrections into first-pass calibration anchors. |
+| **Deployability (Day 5)** | Fly.io deployment with persistent volume, self-healing scheduler, scrape watchdog, per-source health dots in the UI, and per-scrape cost accounting in logs and UI. |
 
-## 2. Setup (one time)
+## The data flywheel
 
-Open Terminal, `cd` into this folder, then:
+Three feedback loops make the system cheaper and smarter the longer it runs:
+
+1. **Reject cache** — every posting that scores below threshold is remembered
+   by key; boards repost the same jobs every day, so each bad job is scored
+   exactly once, ever. Cost per scrape *declines* as the agent sees more of
+   the market.
+2. **Prompt mining** — every time the Sonnet judge overrides the Haiku scorer,
+   both scores and both reasonings are logged. Mining ~300 of those
+   disagreements revealed one dominant bias (functional mismatches parked at
+   ~72) and produced calibration anchors now baked into the scorer's cached
+   rubric. Validated result: the exact historical failure cases moved from
+   ~72 to 15–18 on the first pass — which also eliminated ~70% of judge
+   calls, since correctly-low scores never trigger the cascade.
+3. **Health & cost telemetry** — every run updates per-source status dots and
+   an estimated-cost line, which is what justified policies like
+   "browser-path sources run once daily" and tells the owner which dormant
+   sources deserve adapter work next.
+
+## Cost engineering
+
+Real numbers from the Anthropic console export: naive operation peaked at
+**$7.4/day**; the optimized steady state targets **under $1/day** — a 10×
+reduction with no scoring-quality loss:
+
+- Deterministic pre-filters (location, dedup, reject cache, a years-of-experience
+  hard-cap gate) discard ~90% of candidates before any token is spent
+- Prompt caching of the résumé + scoring rubric (6k tokens, ~0.1× price on
+  read), with warm-then-fan-out batch ordering so parallel batches read the
+  cache instead of stampeding it
+- Structured outputs eliminate parse-failure retries
+- Conditional reasoning: discarded jobs get an 8-word verdict, not a paragraph
+- Status-aware retries (never retry a 400 twice)
+- Per-scrape cost lines make any regression visible the same day
+
+## Security & privacy (Concierge-track requirement)
+
+- Single-user by design; the résumé and all scored data live in SQLite on a
+  private volume, never in the repo
+- HTTP Basic Auth (`APP_PASSWORD`) in front of the entire app
+- All secrets via environment (`.env` local, `fly secrets` in prod) — the
+  repo contains none
+- LLM responses are JSON-schema-constrained; scraped web content is sliced
+  and filtered before it reaches a prompt
+
+## Repo layout
+
+```
+src/            Node/Express app: scheduler, scraper, ATS adapters,
+                browser path, AI layer, SQLite
+public/         Dashboard UI (vanilla JS + Tailwind)
+mcp-server/     MCP stdio server exposing the agent as tools
+adk-agent/      Google ADK concierge agent (Gemini) over the same API
+docs/           Architecture diagram, capstone writeup, video script
+```
+
+## Quickstart
 
 ```bash
-npm install                    # install dependencies
-npm run setup                  # download the Chromium browser Playwright uses
-cp .env.example .env           # create your config file
+npm install
+npm run setup            # installs the Playwright Chromium used by the browser path
+cp .env.example .env     # add your AI_API_KEY (Anthropic; or set AI_PROVIDER=openai
+                         # with any OpenAI-compatible endpoint, incl. Gemini's)
+node src/server.js       # http://localhost:5179
 ```
 
-Open `.env` in a text editor and set at least:
+Add sources and paste a résumé in Settings, hit "Scrape now". To run it
+always-on: `fly launch` (a `fly.toml` and `Dockerfile` are included), set
+secrets with `fly secrets set AI_API_KEY=... APP_PASSWORD=...`, and enable
+the schedule in Settings.
 
-```
-AI_PROVIDER=anthropic          # or: openai
-AI_API_KEY=sk-...              # your key
-```
+## Provider notes
 
-That's the only required config. Everything else has sane defaults.
-
-## 3. Import your existing data (optional but recommended)
-
-Your three Supabase CSVs are already in the `import/` folder. Load them:
-
-```bash
-npm run import
-```
-
-You'll see `142 jobs imported`, your profile, and the status history. Re-running
-is safe — it replaces, it doesn't duplicate. (To import from elsewhere:
-`node src/import-supabase.js /path/to/folder-with-csvs`.)
-
-## 4. Run it
-
-```bash
-npm start
-```
-
-Open **<http://localhost:5179>** in your browser. To stop the server, press
-`Ctrl-C` in the Terminal.
-
----
-
-## Using it
-
-**Dashboard.** Three columns by match tier (1 = strong, 3 = low), the same
-layout as before. Click any card to open its detail drawer.
-
-**Scrape now.** Scans every source in Settings → Scrape sources, extracts
-postings, scores them against your resume/preferences, and adds new ones.
-Progress streams live; a report at the end shows what each source returned.
-
-**In a job's drawer:**
-
-- **Tailor** — rewrites your resume + cover letter for that specific job (no
-  fabrication) and stores both, viewable right there.
-- **Open apply page** — opens the job's application URL in a new tab so you can
-  apply on the company site yourself.
-- **Mark applied** — records that you applied; the job moves to the Applied view.
-- **Reject** — dismisses it and records feedback so future scoring avoids
-  similar roles.
-
-**Settings.** Your resume text, base cover letter, targeting (titles / keywords
-/ locations / excluded companies), and scrape sources.
-
----
-
-## Performance knobs (`.env`)
-
-| Variable | Default | What it does |
-|---|---|---|
-| `SCRAPE_CONCURRENCY` | 6 | Sources scraped in parallel |
-| `PAGE_CONCURRENCY` | 4 | Job pages per source in parallel |
-| `PAGE_TIMEOUT_MS` | 15000 | Max wait for a page |
-| `SCORE_BATCH_SIZE` | 10 | Jobs scored per AI call |
-| `SCORE_CONCURRENCY` | 4 | Scoring batches run in parallel |
-
-If your Mac is older or RAM-limited, lower `SCRAPE_CONCURRENCY` to 3–4.
-
-## Choosing a model
-
-- **Anthropic** (default): leave `AI_MODEL` blank to use `claude-3-5-haiku-latest`
-  (fast and cheap). Override with any model string, e.g. a Sonnet model for
-  higher-quality tailoring.
-- **OpenAI** / compatible: set `AI_PROVIDER=openai`; default model is
-  `gpt-4o-mini`. Set `AI_BASE_URL` to point at OpenRouter, Ollama, LM Studio,
-  etc.
-
-## Scheduled scraping + email digest (hosted)
-
-Run the scraper on a schedule and get an email of the new high-scoring jobs.
-This is fully headless, so it runs on a server.
-
-**How it works:** set `SCRAPE_INTERVAL_HOURS` and the app runs the scrape on
-that interval in-process, then emails every newly inserted job scoring at or
-above `DIGEST_MIN_SCORE` (default 85) via [Resend](https://resend.com).
-
-Relevant `.env` / env vars:
-
-| Variable | Default | What it does |
-|---|---|---|
-| `SCRAPE_INTERVAL_HOURS` | 0 (off) | Hours between auto-scrapes. Set to `4`. |
-| `DIGEST_MIN_SCORE` | 85 | Only email matches at/above this score |
-| `RESEND_API_KEY` | — | Your Resend API key |
-| `DIGEST_TO` | — | Where to send the digest |
-| `DIGEST_FROM` | `onboarding@resend.dev` | Sender (test default works to your own Resend email) |
-| `APP_PASSWORD` | — | If set, the whole app requires this password (Basic Auth) |
-
-Test it locally first: `npm start`, then
-`curl -X POST http://localhost:5179/api/scrape/run` runs one scrape+digest now.
-
-> **Resend + an outlook.com (or any external) recipient:** Resend's shared
-> `onboarding@resend.dev` sender can only deliver to the email address that owns
-> the Resend account. To email `esben.kofoed@outlook.com`, either sign up for
-> Resend **with that Outlook address** (then the test sender works as-is), or
-> verify your own domain in Resend and set `DIGEST_FROM` to an address on it.
-> Verifying a domain is the more reliable long-term option (Outlook is strict
-> about spam).
-
-### Deploy to Fly.io
-
-A `Dockerfile` and `fly.toml` are included.
-
-```bash
-# 1. Install the CLI and sign in
-brew install flyctl       # or: curl -L https://fly.io/install.sh | sh
-fly auth signup           # (or: fly auth login)
-
-# 2. From this folder, create the app (don't deploy yet)
-fly launch --no-deploy
-#   - accept using the existing fly.toml / Dockerfile
-#   - it will pick a unique app name (or edit `app` in fly.toml first)
-
-# 3. Create the persistent disk for the SQLite DB (match fly.toml: name "jobdata")
-fly volumes create jobdata --size 1 --region <your-region>
-
-# 4. Set your secrets (never commit these). DIGEST_TO is already in fly.toml.
-fly secrets set \
-  AI_API_KEY=sk-ant-... \
-  RESEND_API_KEY=re_... \
-  APP_PASSWORD=pick-a-strong-password
-
-# 5. Deploy
-fly deploy
-
-# 6. Open it and finish setup (resume text, targets, locations, scrape sources)
-fly open
-```
-
-On first boot the database is empty, so set your **resume text, target
-preferences (titles/keywords/locations), and scrape sources** in the deployed
-app's Settings page. (Alternatively, copy your local `data/job-agent.db` onto
-the volume with `fly ssh sftp` to bring your existing 142 jobs + profile along —
-stop the machine first so the DB isn't locked.)
-
-The interval, min-score, and from-address are already set in `fly.toml`'s
-`[env]`; change them there and re-deploy to adjust. Logs: `fly logs` (you'll see
-`[scheduler] every 4h …` and each run's insert/email counts).
-
-**Cost:** a `shared-cpu-1x` / 1 GB machine with a 1 GB volume runs ~$5–6/month.
-1 GB RAM gives Chromium headroom for browser-fallback scrapes; most of your
-sources hit ATS JSON APIs and need no browser at all.
-
-## Troubleshooting
-
-- **"AI key missing" pill** — set `AI_API_KEY` in `.env` and restart.
-- **`better-sqlite3` install fails** — run `xcode-select --install`, then
-  `npm install` again.
-- **Scrape finds nothing** — run `npm run setup` to ensure Chromium is installed.
-- **A source returns 0 jobs** — many big employer boards (Workday/Oracle) are
-  JavaScript-gated or paginated; a direct ATS link
-  (e.g. `boards.greenhouse.io/<company>`) usually works better than the
-  marketing `/careers` page.
-
-## Project layout
-
-```
-src/
-  server.js          Express API + serves the UI
-  db.js              SQLite schema + queries
-  ai.js              Anthropic/OpenAI calls: extract, batch-score, tailor
-  browser.js         Shared Chromium for scraping
-  scraper.js         Fast parallel scraper
-  scheduler.js       In-process every-N-hours scrape + digest trigger
-  notify.js          Resend email digest of high-scoring new jobs
-  twofa.js           Optional Outlook 2FA code fetcher
-  import-supabase.js CSV importer for your old data
-public/              The web UI (index.html, app.js, styles.css)
-import/              Your Supabase CSV exports
-data/                The local SQLite database (created on first run)
-```
+The AI layer is provider-agnostic (`src/ai.js`): `AI_PROVIDER=anthropic` uses
+the Messages API with prompt caching and structured outputs;
+`AI_PROVIDER=openai` speaks the Chat Completions shape and works with any
+OpenAI-compatible endpoint — including Gemini's
+(`AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai`,
+`AI_MODEL=gemini-2.5-flash`). The production deployment runs the
+Haiku/Sonnet cascade; the ADK concierge runs Gemini — right model per task.
