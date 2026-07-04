@@ -23,7 +23,7 @@ with an AI coding agent across ~2 weeks of sessions.
 
 ## How it works
 
-![Architecture](https://raw.githubusercontent.com/EsbenKofoedSvendsen/job-agent-capstone/main/docs/architecture.svg)
+![Architecture](https://raw.githubusercontent.com/EsbenKofoedSvendsen/job-agent-capstone/main/docs/architecture-v2.svg)
 
 **Multi-agent cost cascade.** Four specialized model roles: a Haiku *extractor*
 turns raw page text into structured jobs (only for browser-scraped sites — 9

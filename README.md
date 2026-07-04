@@ -16,7 +16,7 @@ The entire system was **vibe-coded**: designed, built, debugged, and
 cost-optimized conversationally with an AI coding agent, over roughly two
 weeks of sessions.
 
-![Architecture](docs/architecture.svg)
+![Architecture](docs/architecture-v2.svg)
 
 ## Course-concept mapping
 
