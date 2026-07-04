@@ -78,6 +78,9 @@ export const config = {
   // Optional HTTP Basic Auth. STRONGLY recommended when hosting publicly so a
   // stranger with the URL can't trigger actions or wipe your board. Empty = off.
   appPassword: process.env.APP_PASSWORD || "",
+  // Optional second password granting READ-ONLY demo access (GET endpoints
+  // only, résumé/profile and tailored documents excluded). Empty = disabled.
+  viewerPassword: process.env.VIEWER_PASSWORD || "",
 
   paths: {
     db: path.join(ROOT, "data", "job-agent.db"),

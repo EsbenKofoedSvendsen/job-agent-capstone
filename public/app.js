@@ -76,7 +76,17 @@ function fmtCountdown(ms) {
   return `${sec}s`;
 }
 async function loadStatus() {
-  try { state.status = await api("GET", "/api/status"); renderStatus(); } catch { /* ignore */ }
+  try { state.status = await api("GET", "/api/status"); applyRole(); renderStatus(); } catch { /* ignore */ }
+}
+// Read-only demo accounts: hide every control that acts (the server enforces
+// this too — hiding is just so judges don't click into 403s).
+function applyRole() {
+  state.role = state.status?.role || "admin";
+  if (state.role !== "viewer") return;
+  ["btn-scrape", "btn-clear", "btn-settings", "btn-rescore"].forEach((id) => {
+    const b = document.getElementById(id);
+    if (b) b.classList.add("hidden");
+  });
 }
 function renderStatus() {
   const el = $("#scrape-status"); if (!el) return;
@@ -256,7 +266,7 @@ async function openDrawer(id) {
       <h4>AI match · ${job.match_percentage}%</h4>
       <div>${esc(job.match_reasoning) || "—"}</div>
     </div>
-    <div class="drawer-actions">${actions}</div>
+    ${state.role === "viewer" ? "" : `<div class="drawer-actions">${actions}</div>`}
     ${hasTailored ? `<div class="section"><h4>Tailored resume</h4><div class="panelbox"><pre>${esc(job.tailored_resume_text || "")}</pre></div></div>
       <div class="section"><h4>Tailored cover letter</h4><div class="panelbox"><pre>${esc(job.tailored_cover_letter_text || "")}</pre></div></div>` : ""}
     <div class="section"><h4>Status history</h4>

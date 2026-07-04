@@ -1,5 +1,6 @@
 import express from "express";
 import path from "node:path";
+import crypto from "node:crypto";
 import { config, aiConfigured } from "./config.js";
 import {
   getProfile, updateProfile, listJobs, getJob, updateJob, deleteJob, clearJobs,
@@ -20,13 +21,34 @@ const app = express();
 // Optional HTTP Basic Auth. When APP_PASSWORD is set (recommended for any
 // public host), every request must carry it. The browser caches the
 // credentials and replays them on later requests — including the SSE stream.
+// Timing-safe password comparison (hash first so lengths always match).
+const safeEq = (a, b) => {
+  if (!a || !b) return false;
+  const ha = crypto.createHash("sha256").update(String(a)).digest();
+  const hb = crypto.createHash("sha256").update(String(b)).digest();
+  return crypto.timingSafeEqual(ha, hb);
+};
+
 if (config.appPassword) {
   app.use((req, res, next) => {
     const [, b64 = ""] = (req.headers.authorization || "").split(" ");
     const [, pass = ""] = Buffer.from(b64, "base64").toString().split(":");
-    if (pass === config.appPassword) return next();
+    if (safeEq(pass, config.appPassword)) { req.role = "admin"; return next(); }
+    if (config.viewerPassword && safeEq(pass, config.viewerPassword)) { req.role = "viewer"; return next(); }
     res.set("WWW-Authenticate", 'Basic realm="Job Agent"');
     return res.status(401).send("Authentication required");
+  });
+
+  // Viewer = read-only demo access. Only GET is allowed, and never the two
+  // GETs that act or expose personal data: the SSE endpoint (it STARTS a
+  // scrape) and the profile (it contains the résumé). Enforced here so the
+  // API is safe regardless of what the UI shows.
+  app.use((req, res, next) => {
+    if (req.role !== "viewer") return next();
+    if (req.method !== "GET" || req.path === "/api/scrape/stream" || req.path === "/api/profile") {
+      return res.status(403).json({ error: "Read-only demo access — this action is admin-only." });
+    }
+    next();
   });
 }
 
@@ -99,6 +121,7 @@ app.post("/api/jobs/rescore", wrap(async (req, res) => {
 app.get("/api/status", wrap((req, res) => {
   const sched = getSchedulerStatus();
   res.json({
+    role: req.role || "admin",
     scheduler: sched,
     last_scrape_auto: parseMeta(getMeta("last_scrape_auto")),
     last_scrape_manual: parseMeta(getMeta("last_scrape_manual")),
@@ -116,12 +139,16 @@ app.put("/api/settings/schedule", wrap((req, res) => {
 }));
 
 // --- jobs -----------------------------------------------------------------
-app.get("/api/jobs", wrap((req, res) => res.json(listJobs())));
+// Viewers see the board but never the owner's tailored documents.
+const redactJob = (req, j) =>
+  req.role === "viewer" ? { ...j, tailored_resume_text: null, tailored_cover_letter_text: null } : j;
+
+app.get("/api/jobs", wrap((req, res) => res.json(listJobs().map((j) => redactJob(req, j)))));
 
 app.get("/api/jobs/:id", wrap((req, res) => {
   const data = getJob(req.params.id);
   if (!data) return res.status(404).json({ error: "not found" });
-  res.json(data);
+  res.json({ ...data, ...redactJob(req, data) });
 }));
 
 app.patch("/api/jobs/:id", wrap((req, res) => {
