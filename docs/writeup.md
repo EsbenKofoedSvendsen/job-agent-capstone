@@ -1,6 +1,6 @@
 # Job Agent — an autonomous job-search concierge
 
-**Track: Concierge Agents** · [Code](https://github.com/REPLACE_ME/job-agent-capstone) · [Video](REPLACE_ME) · Live app: deployed 24/7 on Fly.io (password-protected — it holds my real résumé; the video shows it live)
+**Track: Concierge Agents** · [Code](https://github.com/EsbenKofoedSvendsen/job-agent-capstone) · [Video](REPLACE_ME) · Live app: deployed 24/7 on Fly.io (password-protected — it holds my real résumé; the video shows it live)
 
 ## Why I built it
 
@@ -23,7 +23,7 @@ with an AI coding agent across ~2 weeks of sessions.
 
 ## How it works
 
-![Architecture](https://raw.githubusercontent.com/REPLACE_ME/job-agent-capstone/main/docs/architecture.svg)
+![Architecture](https://raw.githubusercontent.com/EsbenKofoedSvendsen/job-agent-capstone/main/docs/architecture.svg)
 
 **Multi-agent cost cascade.** Four specialized model roles: a Haiku *extractor*
 turns raw page text into structured jobs (only for browser-scraped sites — 9
