@@ -22,7 +22,7 @@ weeks of sessions.
 
 | Course concept | Where it lives here |
 |---|---|
-| **Multi-agent system** | Four specialized model roles in a cost cascade: Haiku *extractor* (unstructured page text → jobs), Haiku *first-pass scorer* (batched, cached rubric), Sonnet *judge* (second opinion on scores > 70), Sonnet *tailor* (résumé/cover-letter rewrite on demand) — plus a Gemini-powered ADK concierge in [`adk-agent/`](adk-agent/) that fronts the whole system conversationally. |
+| **Multi-agent system** | Four specialized model roles in a cost cascade: Haiku *extractor* (unstructured page text → jobs), Haiku *first-pass scorer* (batched, cached rubric), Sonnet *judge* (second opinion on scores > 70), Sonnet *tailor* (résumé/cover-letter rewrite on demand). |
 | **MCP server** | [`mcp-server/`](mcp-server/) exposes the live agent as Model Context Protocol tools (board, scoring, source health, cost telemetry) usable from Claude Desktop, Gemini CLI, or Antigravity. |
 | **Agent tools & interoperability** | 9 ATS JSON adapters (Greenhouse, Lever, Ashby, Workday, Oracle, Amazon, Eightfold, SmartRecruiters, Uber) + a Playwright browser path with XHR network capture for JS-gated career sites; REST API; Resend email. |
 | **Memory & state** | SQLite on a persistent volume: the job board, a 30-day negative-dedup reject cache, a model-disagreement log, per-source health, cost telemetry. The agent's judgment *and* its economics improve as state accumulates. |
@@ -82,7 +82,6 @@ src/            Node/Express app: scheduler, scraper, ATS adapters,
                 browser path, AI layer, SQLite
 public/         Dashboard UI (vanilla JS + Tailwind)
 mcp-server/     MCP stdio server exposing the agent as tools
-adk-agent/      Google ADK concierge agent (Gemini) over the same API
 docs/           Architecture diagram, capstone writeup, video script
 ```
 
@@ -109,4 +108,4 @@ the Messages API with prompt caching and structured outputs;
 OpenAI-compatible endpoint — including Gemini's
 (`AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai`,
 `AI_MODEL=gemini-2.5-flash`). The production deployment runs the
-Haiku/Sonnet cascade; the ADK concierge runs Gemini — right model per task.
+Haiku/Sonnet cascade — right model per task, swap freely.

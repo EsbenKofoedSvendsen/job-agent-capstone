@@ -30,10 +30,8 @@ turns raw page text into structured jobs (only for browser-scraped sites — 9
 ATS APIs are parsed deterministically); a Haiku *first-pass scorer* judges
 every candidate in batches of 10 against a cached rubric; a Sonnet *judge*
 gives a second opinion only on scores above 70; a Sonnet *tailor* rewrites my
-résumé for a specific role on demand. A Gemini-powered **ADK concierge**
-(`adk-agent/`) sits on top for conversation ("what are my best matches
-today?"), and an **MCP server** (`mcp-server/`) exposes the whole system as
-tools to any MCP client.
+résumé for a specific role on demand. An **MCP server** (`mcp-server/`)
+exposes the whole system as tools to any MCP client.
 
 **The data flywheel** is the part I'm proudest of. Three feedback loops make
 the agent cheaper and smarter with age:
@@ -63,8 +61,7 @@ export.
 
 ## Course concepts demonstrated
 
-1. **Multi-agent system** — extractor / scorer / judge / tailor cascade + ADK
-   concierge (code)
+1. **Multi-agent system** — extractor / scorer / judge / tailor cascade (code)
 2. **MCP server** — five tools over the live agent (code)
 3. **Memory & state / agent skills** — reject cache, disagreement log,
    source health; the agent provably improves with accumulated state (code)
