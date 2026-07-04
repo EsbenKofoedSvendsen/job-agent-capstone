@@ -1,0 +1,29 @@
+{
+  "name": "job-agent-local",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-contained local job-application agent: fast Playwright scraping, AI scoring, resume tailoring, and assisted auto-apply. Runs entirely on your Mac.",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "setup": "playwright install chromium",
+    "import": "node src/import-supabase.js",
+    "test-ai": "node src/test-ai.js",
+    "build:css": "tailwindcss -i ./src/input.css -o ./public/tailwind.css --minify"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "csv-parse": "^5.6.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
+    "playwright": "^1.49.1"
+  },
+  "devDependencies": {
+    "@flydotio/dockerfile": "^0.7.4",
+    "tailwindcss": "^3.4.19"
+  }
+}

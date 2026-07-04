@@ -1,0 +1,46 @@
+# fly.toml app configuration file generated for kofoed-job-agent on 2026-06-18T14:20:31-04:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'kofoed-job-agent'
+primary_region = 'iad'
+
+[build]
+
+[env]
+  DIGEST_FROM = 'Job Agent <onboarding@resend.dev>'
+  DIGEST_MIN_SCORE = '85'
+  DIGEST_TO = 'you@example.com'
+  PORT = '5179'
+  SCRAPE_INTERVAL_HOURS = '4'
+  # Weekend pause + timestamps use this local timezone (not UTC).
+  TZ = 'America/New_York'
+  # Lowered from 6/4 to keep peak Chromium memory under the 1GB limit (was OOM-looping).
+  SCRAPE_CONCURRENCY = '3'
+  PAGE_CONCURRENCY = '2'
+  # Per-task AI models. Cheap Haiku for the high-volume work; Sonnet for the
+  # confirm-pass and tailoring. Jobs the first pass scores ABOVE RESCORE_THRESHOLD
+  # get re-scored by MODEL_RESCORE.
+  MODEL_EXTRACT = 'claude-haiku-4-5'
+  MODEL_SCORE = 'claude-haiku-4-5'
+  MODEL_RESCORE = 'claude-sonnet-4-6'
+  MODEL_TAILOR = 'claude-sonnet-4-6'
+  RESCORE_THRESHOLD = '70'
+
+[[mounts]]
+  source = 'jobdata'
+  destination = '/app/data'
+
+[http_service]
+  internal_port = 5179
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '1gb'
+  cpus = 1
+  memory_mb = 1024

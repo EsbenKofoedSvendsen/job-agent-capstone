@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Job Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/tailwind.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">▮</div>
+      <div>
+        <div class="brand-kicker">HIREME · LOCAL</div>
+        <div class="brand-title">Application Pipeline</div>
+      </div>
+      <span id="ai-pill" class="pill pill-muted">checking…</span>
+    </div>
+    <div class="actions">
+      <button id="btn-scrape" class="btn btn-primary">
+        <span class="btn-label">⟳ Scrape now</span>
+      </button>
+      <button id="btn-report" class="btn btn-ghost hidden">Report</button>
+      <button id="btn-applied" class="btn btn-ghost">✓ Applied</button>
+      <button id="btn-rescore-impact" class="btn btn-ghost">📊 Sonnet impact</button>
+      <button id="btn-errors" class="btn btn-ghost">⚠ Errors</button>
+      <button id="btn-clear" class="btn btn-ghost" title="Remove all jobs from the board">🗑 Clear board</button>
+      <button id="btn-settings" class="btn btn-ghost">⚙ Settings</button>
+    </div>
+  </header>
+
+  <!-- DASHBOARD -->
+  <main id="view-dashboard" class="container">
+    <section class="scrape-status" id="scrape-status"></section>
+    <section class="metrics" id="metrics"></section>
+    <section class="filterbar">
+      <input type="text" id="filter-location" placeholder="Filter by location… (e.g. New York)" />
+      <select id="filter-company"><option value="">All companies</option></select>
+      <select id="filter-posted">
+        <option value="">Any date</option>
+        <option value="1">Posted last 24h</option>
+        <option value="7">Posted last 7 days</option>
+        <option value="30">Posted last 30 days</option>
+      </select>
+      <select id="filter-scraped">
+        <option value="">Any scrape time</option>
+        <option value="1">Scraped last 24h</option>
+        <option value="2">Scraped last 2 days</option>
+        <option value="5">Scraped last 5 days</option>
+        <option value="7">Scraped last week</option>
+      </select>
+      <input type="number" id="filter-minscore" min="0" max="100" step="1" placeholder="Min score" title="Hide jobs below this match score" />
+      <select id="filter-sort">
+        <option value="score">Sort: Best match</option>
+        <option value="newest">Sort: Newest posted</option>
+        <option value="scraped">Sort: Recently scraped</option>
+      </select>
+      <button id="filter-clear" class="btn btn-ghost small">Clear</button>
+      <span id="filter-count" class="hint"></span>
+    </section>
+    <section class="board">
+      <div class="col" data-tier="TIER_1">
+        <div class="col-head"><span class="dot dot-1"></span><h2>Tier 1 · Strong match</h2><span class="count" id="count-1">0</span></div>
+        <div class="col-body" id="col-1"></div>
+      </div>
+      <div class="col" data-tier="TIER_2">
+        <div class="col-head"><span class="dot dot-2"></span><h2>Tier 2 · Worth a look</h2><span class="count" id="count-2">0</span></div>
+        <div class="col-body" id="col-2"></div>
+      </div>
+      <div class="col" data-tier="TIER_3">
+        <div class="col-head"><span class="dot dot-3"></span><h2>Tier 3 · Low match</h2><span class="count" id="count-3">0</span></div>
+        <div class="col-body" id="col-3"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- SETTINGS -->
+  <main id="view-settings" class="container hidden">
+    <div class="settings-head">
+      <h1>Settings</h1>
+      <button id="btn-back" class="btn btn-ghost">← Back to pipeline</button>
+    </div>
+
+    <div class="settings-grid">
+      <section class="panel">
+        <h3>Base resume</h3>
+        <p class="hint">Plain text used to score jobs and tailor applications.</p>
+        <textarea id="f-resume" rows="10" placeholder="Paste your resume text…"></textarea>
+      </section>
+
+      <section class="panel">
+        <h3>Base cover letter</h3>
+        <p class="hint">Starting point the AI rewrites per job.</p>
+        <textarea id="f-cover" rows="10" placeholder="Paste a base cover letter…"></textarea>
+      </section>
+
+      <section class="panel">
+        <h3>Targeting</h3>
+        <label>Titles <span class="hint">(comma separated)</span></label>
+        <textarea id="f-titles" rows="2"></textarea>
+        <label>Keywords</label>
+        <textarea id="f-keywords" rows="2"></textarea>
+        <label>Locations</label>
+        <textarea id="f-locations" rows="2"></textarea>
+        <label>Only these locations <span class="hint">(hard filter — e.g. New York. Blank = all)</span></label>
+        <textarea id="f-locfilter" rows="1" placeholder="New York"></textarea>
+        <label>Excluded companies</label>
+        <textarea id="f-excluded" rows="2"></textarea>
+        <label>Exclude title keywords <span class="hint">(dropped before AI — e.g. intern, analyst, vice president)</span></label>
+        <textarea id="f-exclude-titles" rows="1"></textarea>
+        <label>Minimum match score <span class="hint">(0–100; jobs below this are discarded, not shown)</span></label>
+        <input type="text" id="f-min-score" inputmode="numeric" placeholder="0 (off)" />
+      </section>
+
+      <section class="panel">
+        <h3>Scrape sources</h3>
+        <p class="hint">Job-board / careers URLs to scan. One per row. The dot shows the last scrape's outcome — hover for details.</p>
+        <div class="sources-legend">
+          <span class="lg"><span class="src-status ok"></span> returns jobs</span>
+          <span class="lg"><span class="src-status empty"></span> loaded, 0 jobs</span>
+          <span class="lg"><span class="src-status error"></span> error</span>
+          <span class="lg"><span class="src-status unknown"></span> not scraped yet</span>
+        </div>
+        <div id="sources-list" class="sources-list"></div>
+        <button id="btn-add-source" class="btn btn-ghost small">+ Add source</button>
+      </section>
+
+      <section class="panel panel-wide">
+        <h3>Schedule &amp; email notifications</h3>
+        <p class="hint">When the cloud scrapes (your local time), the email score cutoff, and which days to pause. Changes apply live — no redeploy.</p>
+        <label>Scrape at these times <span class="hint">(weekdays / non-paused days)</span></label>
+        <div id="sch-times" class="sched-times"></div>
+        <button id="btn-add-time" class="btn btn-ghost small">+ Add time</button>
+        <label style="margin-top:12px">Email me jobs scoring ≥ <span class="hint">(0–100)</span></label>
+        <input type="number" id="sch-digest" min="0" max="100" step="1" style="max-width:120px" />
+        <label style="margin-top:12px">Re-score with Sonnet above <span class="hint">(0–100; higher = fewer Sonnet calls = cheaper)</span></label>
+        <input type="number" id="sch-rescore" min="0" max="100" step="1" style="max-width:120px" />
+        <label style="margin-top:12px">Pause scraping on</label>
+        <div id="sch-days" class="sched-days"></div>
+        <div class="row" style="margin-top:12px">
+          <button id="btn-save-schedule" class="btn btn-primary">Save schedule</button>
+          <span id="sched-status" class="hint"></span>
+        </div>
+        <hr style="border:none;border-top:1px solid var(--panel-border);margin:16px 0" />
+        <p class="hint">Re-score every job on the board with the current scoring prompt — use after changing your résumé or targeting. Scores/tiers update in place; low scorers drop to Tier 3 (hide them with the dashboard "Min score" filter).</p>
+        <div class="row">
+          <button id="btn-rescore" class="btn btn-ghost">↻ Re-score board</button>
+          <span id="rescore-status" class="hint"></span>
+        </div>
+      </section>
+
+      <section class="panel panel-wide">
+        <h3>Test a job (score preview)</h3>
+        <p class="hint">Paste any posting to see how the scorer rates it against your résumé — nothing is saved to the board. Good for sanity-checking calibration.</p>
+        <div class="sched-grid">
+          <div class="field"><label>Title</label><input type="text" id="t-title" placeholder="e.g. Strategy &amp; Operations Manager" /></div>
+          <div class="field"><label>Company</label><input type="text" id="t-company" placeholder="e.g. Ramp" /></div>
+        </div>
+        <label style="margin-top:8px">Location <span class="hint">(optional)</span></label>
+        <input type="text" id="t-location" placeholder="New York, NY" style="max-width:240px" />
+        <label style="margin-top:8px">Job description <span class="hint">(paste the full posting text)</span></label>
+        <textarea id="t-desc" rows="6" placeholder="Paste the job description here…"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button id="btn-scoretest" class="btn btn-primary">Score it</button>
+          <span id="scoretest-status" class="hint"></span>
+        </div>
+        <div id="scoretest-result"></div>
+      </section>
+
+    </div>
+
+    <div class="settings-actions">
+      <button id="btn-save" class="btn btn-primary">Save settings</button>
+      <span id="save-status" class="hint"></span>
+    </div>
+  </main>
+
+  <!-- APPLIED -->
+  <main id="view-applied" class="container hidden">
+    <div class="settings-head">
+      <h1>Applied jobs <span id="applied-count" class="hint"></span></h1>
+      <button id="btn-applied-back" class="btn btn-ghost">← Back to pipeline</button>
+    </div>
+    <div id="applied-list" class="applied-list"></div>
+  </main>
+
+  <!-- RESCORE IMPACT -->
+  <main id="view-rescore" class="container hidden">
+    <div class="settings-head">
+      <h1>Sonnet rescore impact <span id="rescore-count" class="hint"></span></h1>
+      <button id="btn-rescore-back" class="btn btn-ghost">← Back to pipeline</button>
+    </div>
+    <p class="hint">How much the Sonnet confirm-pass moves scores vs. the cheap Haiku first pass. Flat bars near 0 mean the cascade is changing little (and may not be worth the cost); wide spread means it's doing real work.</p>
+    <div id="rescore-summary" class="metrics"></div>
+    <div id="rescore-chart" class="panel" style="padding:16px;margin-top:14px"></div>
+    <div id="rescore-biggest" style="margin-top:14px"></div>
+  </main>
+
+  <!-- ERRORS -->
+  <main id="view-errors" class="container hidden">
+    <div class="settings-head">
+      <h1>Error log <span id="errors-count" class="hint"></span></h1>
+      <div class="row">
+        <button id="btn-errors-copy" class="btn btn-ghost">📋 Copy all</button>
+        <button id="btn-errors-download" class="btn btn-ghost">⬇ Download</button>
+        <button id="btn-errors-clear" class="btn btn-ghost">Clear</button>
+        <button id="btn-errors-back" class="btn btn-ghost">← Back to pipeline</button>
+      </div>
+    </div>
+    <p class="hint">Recent server-side errors (most recent first). Copy or download to share for debugging.</p>
+    <pre id="errors-pre" class="errors-pre"></pre>
+  </main>
+
+  <!-- JOB DRAWER -->
+  <div id="drawer" class="drawer hidden">
+    <div class="drawer-backdrop" id="drawer-backdrop"></div>
+    <aside class="drawer-panel" id="drawer-panel"></aside>
+  </div>
+
+  <!-- REPORT MODAL -->
+  <div id="report-modal" class="modal hidden">
+    <div class="modal-backdrop" id="report-backdrop"></div>
+    <div class="modal-card" id="report-card"></div>
+  </div>
+
+  <!-- TOASTS -->
+  <div id="toasts" class="toasts"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+.DS_Store
+
+# Local state — lives on the Fly volume, not in the image.
+data
+data/*
+
+# The headed auto-apply Chrome profile is huge and macOS-local; never ship it.
+storage/apply-profile
+
+# Don't bake a resume PDF into the public image.
+storage/resumes/*
+!storage/resumes/.gitkeep

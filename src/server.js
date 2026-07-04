@@ -1,0 +1,255 @@
+import express from "express";
+import path from "node:path";
+import { config, aiConfigured } from "./config.js";
+import {
+  getProfile, updateProfile, listJobs, getJob, updateJob, deleteJob, clearJobs,
+  setMeta, getMeta, logError, listErrors, clearErrors,
+  getScheduleSettings, setScheduleSettings, getRescoreStats, getSourceHealth,
+} from "./db.js";
+import { runScrape, rescoreBoard, isScraping } from "./scraper.js";
+import { tailorApplication, scoreJobsBatch, extractRequirementSignal } from "./ai.js";
+import { closeBrowser } from "./browser.js";
+import { fetchLatestCode } from "./twofa.js";
+import { startScheduler, stopScheduler, runScheduledScrape, sendPendingDigest, getSchedulerStatus, rescheduleScheduler } from "./scheduler.js";
+import { digestReady } from "./notify.js";
+
+const parseMeta = (v) => { try { return v ? JSON.parse(v) : null; } catch { return null; } };
+
+const app = express();
+
+// Optional HTTP Basic Auth. When APP_PASSWORD is set (recommended for any
+// public host), every request must carry it. The browser caches the
+// credentials and replays them on later requests — including the SSE stream.
+if (config.appPassword) {
+  app.use((req, res, next) => {
+    const [, b64 = ""] = (req.headers.authorization || "").split(" ");
+    const [, pass = ""] = Buffer.from(b64, "base64").toString().split(":");
+    if (pass === config.appPassword) return next();
+    res.set("WWW-Authenticate", 'Basic realm="Job Agent"');
+    return res.status(401).send("Authentication required");
+  });
+}
+
+app.use(express.json({ limit: "4mb" }));
+app.use(express.static(config.paths.public));
+
+const wrap = (fn) => (req, res) =>
+  Promise.resolve(fn(req, res)).catch((e) => {
+    console.error(e);
+    logError({
+      context: `${req.method} ${req.path}`,
+      job_id: req.params?.id || null,
+      message: e instanceof Error ? e.message : String(e),
+      detail: e instanceof Error && e.stack ? e.stack : "",
+    });
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  });
+
+// --- health ---------------------------------------------------------------
+app.get("/api/health", (req, res) => {
+  res.json({
+    ai_ready: aiConfigured(),
+    provider: config.ai.provider,
+    model: config.ai.model,
+    models: config.ai.models,
+    rescore_threshold: config.ai.rescoreThreshold,
+    resume_configured: Boolean(getProfile().resume_pdf_path),
+    scheduler_hours: config.digest.intervalHours || 0,
+    digest_ready: digestReady(),
+    digest_min_score: config.digest.minScore,
+  });
+});
+
+// Manually run the scheduled scrape + digest right now (handy for testing the
+// email and for external cron). Runs synchronously; returns a summary.
+app.post("/api/scrape/run", wrap(async (req, res) => {
+  if (!aiConfigured()) return res.status(400).json({ error: "AI not configured (set AI_API_KEY)." });
+  const result = await runScheduledScrape();
+  res.json({ ok: true, ...result });
+}));
+
+// Score a pasted job posting against the profile WITHOUT saving it — a tester
+// for evaluating/tuning the scoring calibration.
+app.post("/api/jobs/score-test", wrap(async (req, res) => {
+  if (!aiConfigured()) return res.status(400).json({ error: "AI not configured (set AI_API_KEY)." });
+  const b = req.body || {};
+  const job = {
+    job_title: String(b.job_title || "").trim(),
+    company_name: String(b.company_name || "").trim() || "Test Company",
+    location: String(b.location || "").trim(),
+    job_description_raw: String(b.job_description_raw || "").trim(),
+  };
+  if (!job.job_title || job.job_description_raw.length < 20) {
+    return res.status(400).json({ error: "Provide at least a title and a description (20+ chars)." });
+  }
+  const [result] = await scoreJobsBatch([job], getProfile());
+  res.json({ ok: true, ...result, requirement: extractRequirementSignal(job.job_description_raw) });
+}));
+
+// Re-score every job on the board with the current scoring prompt (applies
+// calibration changes to existing jobs; drops ones that fall below min_score).
+app.post("/api/jobs/rescore", wrap(async (req, res) => {
+  if (!aiConfigured()) return res.status(400).json({ error: "AI not configured (set AI_API_KEY)." });
+  if (isScraping()) return res.status(409).json({ error: "A scrape is running — try again when it finishes." });
+  const result = await rescoreBoard();
+  res.json({ ok: true, ...result });
+}));
+
+// Dashboard status: scheduler timing + last scrape times + digest config.
+app.get("/api/status", wrap((req, res) => {
+  const sched = getSchedulerStatus();
+  res.json({
+    scheduler: sched,
+    last_scrape_auto: parseMeta(getMeta("last_scrape_auto")),
+    last_scrape_manual: parseMeta(getMeta("last_scrape_manual")),
+    digest_ready: digestReady(),
+    digest_min_score: sched.digestMinScore,
+  });
+}));
+
+// Live-editable schedule + email settings (interval, email threshold, skip days).
+app.get("/api/settings/schedule", wrap((req, res) => res.json(getScheduleSettings())));
+app.put("/api/settings/schedule", wrap((req, res) => {
+  const updated = setScheduleSettings(req.body || {});
+  rescheduleScheduler();
+  res.json(updated);
+}));
+
+// --- jobs -----------------------------------------------------------------
+app.get("/api/jobs", wrap((req, res) => res.json(listJobs())));
+
+app.get("/api/jobs/:id", wrap((req, res) => {
+  const data = getJob(req.params.id);
+  if (!data) return res.status(404).json({ error: "not found" });
+  res.json(data);
+}));
+
+app.patch("/api/jobs/:id", wrap((req, res) => {
+  const updated = updateJob(req.params.id, req.body || {});
+  if (!updated) return res.status(404).json({ error: "not found" });
+  res.json(updated);
+}));
+
+// Clear the whole board (keeps your profile/settings).
+app.delete("/api/jobs", wrap((req, res) => {
+  const removed = clearJobs();
+  res.json({ ok: true, removed });
+}));
+
+app.delete("/api/jobs/:id", wrap((req, res) => {
+  deleteJob(req.params.id);
+  res.json({ ok: true });
+}));
+
+// Reject + record feedback so future scoring learns from it.
+app.post("/api/jobs/:id/reject", wrap((req, res) => {
+  const data = getJob(req.params.id);
+  if (!data) return res.status(404).json({ error: "not found" });
+  const j = data.job;
+  updateJob(j.id, { status: "REJECTED", tier: "TIER_3" });
+  const profile = getProfile();
+  const snippet = `Rejected: ${j.job_title} @ ${j.company_name}. ${(j.job_description_raw || "").slice(0, 400)}`;
+  const corpus = [snippet, ...(profile.negative_feedback_corpus || [])].slice(0, 100);
+  updateProfile({ negative_feedback_corpus: corpus });
+  res.json({ ok: true });
+}));
+
+app.post("/api/jobs/:id/reopen", wrap((req, res) => {
+  const updated = updateJob(req.params.id, { status: "PENDING_APPROVAL" });
+  if (!updated) return res.status(404).json({ error: "not found" });
+  res.json(updated);
+}));
+
+// Tailor resume + cover letter.
+app.post("/api/jobs/:id/tailor", wrap(async (req, res) => {
+  if (!aiConfigured()) return res.status(400).json({ error: "AI not configured (set AI_API_KEY in .env)." });
+  const data = getJob(req.params.id);
+  if (!data) return res.status(404).json({ error: "not found" });
+  updateJob(data.job.id, { status: "TAILORING" });
+  const profile = getProfile();
+  const out = await tailorApplication(data.job, profile);
+  const updated = updateJob(data.job.id, {
+    tailored_resume_text: out.tailored_resume,
+    tailored_cover_letter_text: out.tailored_cover_letter,
+    status: "TAILORED",
+  });
+  res.json(updated);
+}));
+
+// --- scrape (SSE progress) ------------------------------------------------
+app.get("/api/scrape/stream", async (req, res) => {
+  if (!aiConfigured()) {
+    res.status(400).json({ error: "AI not configured (set AI_API_KEY in .env)." });
+    return;
+  }
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  try {
+    const urls = req.query.urls ? String(req.query.urls).split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+    const result = await runScrape({ urls, onEvent: send });
+    setMeta("last_scrape_manual", JSON.stringify({ at: new Date().toISOString(), inserted: result.total_inserted }));
+    // Email any new high-scoring matches from this run too.
+    try {
+      const d = await sendPendingDigest();
+      if (d.emailed) send({ type: "emailed", count: d.emailed });
+    } catch (e) {
+      send({ type: "email_error", error: e instanceof Error ? e.message : String(e) });
+    }
+  } catch (e) {
+    send({ type: "error", error: e instanceof Error ? e.message : String(e) });
+  } finally {
+    send({ type: "end" });
+    res.end();
+  }
+});
+
+// --- rescore impact (Sonnet vs Haiku deltas) ------------------------------
+app.get("/api/rescore-stats", wrap((req, res) => res.json(getRescoreStats())));
+
+app.get("/api/sources/health", wrap((req, res) => res.json(getSourceHealth())));
+
+// --- error log ------------------------------------------------------------
+app.get("/api/errors", wrap((req, res) => res.json(listErrors())));
+app.delete("/api/errors", wrap((req, res) => res.json({ ok: true, removed: clearErrors() })));
+
+// --- profile / settings ---------------------------------------------------
+app.get("/api/profile", wrap((req, res) => res.json(getProfile())));
+
+app.put("/api/profile", wrap((req, res) => {
+  const allowed = [
+    "base_resume_text", "base_cover_letter_text",
+    "target_preferences", "negative_feedback_corpus",
+  ];
+  const patch = {};
+  for (const k of allowed) if (k in (req.body || {})) patch[k] = req.body[k];
+  res.json(updateProfile(patch));
+}));
+
+// --- 2FA helper -----------------------------------------------------------
+app.post("/api/2fa", wrap(async (req, res) => {
+  const out = await fetchLatestCode(req.body || {});
+  res.json(out);
+}));
+
+// SPA fallback
+app.get("*", (req, res) => res.sendFile(path.join(config.paths.public, "index.html")));
+
+const server = app.listen(config.port, () => {
+  console.log(`\n  Job Agent Local running →  http://localhost:${config.port}\n`);
+  if (!aiConfigured()) console.log("  ⚠  AI_API_KEY not set — add it to .env, then restart.\n");
+  startScheduler();
+});
+
+async function shutdown() {
+  console.log("\nShutting down…");
+  stopScheduler();
+  await closeBrowser();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 2000);
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
