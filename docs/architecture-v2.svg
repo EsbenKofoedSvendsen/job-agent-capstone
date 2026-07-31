@@ -1,6 +1,6 @@
 <svg width="680" viewBox="0 0 680 870" role="img" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
 <title>Job Agent architecture</title>
-<desc>Pipeline from scheduler through sources, filters, Haiku first-pass and Opus second-opinion scoring to storage and outputs, with three feedback loops: reject cache, prompt mining, and source health.</desc>
+<desc>Pipeline from scheduler through sources, filters, Haiku first-pass and Opus second-opinion scoring to storage and outputs, with two feedback loops: a reject cache and per-source health and cost tracking.</desc>
 <defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
 <rect x="0" y="0" width="680" height="870" fill="#ffffff"/>
 
@@ -23,7 +23,7 @@
 <path d="M130 200 V328" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
 
 <g><rect x="240" y="240" width="180" height="56" rx="4" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
-<text x="330" y="261" font-size="14" font-weight="600" fill="#3C3489" text-anchor="middle">Haiku — extractor</text>
+<text x="330" y="261" font-size="14" font-weight="600" fill="#3C3489" text-anchor="middle">Haiku 4.5 — extractor</text>
 <text x="330" y="283" font-size="12" fill="#534AB7" text-anchor="middle">page text to jobs</text></g>
 
 <path d="M330 296 V328" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
@@ -61,32 +61,20 @@
 <text x="330" y="773" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">Email digest</text>
 <text x="330" y="795" font-size="12" fill="#5F5E5A" text-anchor="middle">Resend · score 85+</text></g>
 
-<rect x="468" y="348" width="170" height="372" rx="4" fill="none" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="4 3"/>
+<rect x="468" y="348" width="170" height="204" rx="4" fill="none" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="4 3"/>
 <text x="553" y="372" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">Data flywheel</text>
 
 <g><rect x="476" y="384" width="156" height="56" rx="4" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
 <text x="554" y="405" font-size="14" font-weight="600" fill="#085041" text-anchor="middle">Reject cache</text>
 <text x="554" y="427" font-size="12" fill="#0F6E56" text-anchor="middle">skip known rejects</text></g>
 
-<g><rect x="476" y="540" width="156" height="56" rx="4" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
-<text x="554" y="561" font-size="14" font-weight="600" fill="#085041" text-anchor="middle">Prompt mining</text>
-<text x="554" y="583" font-size="12" fill="#0F6E56" text-anchor="middle">cascade deltas</text></g>
-
-<g><rect x="476" y="640" width="156" height="56" rx="4" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
-<text x="554" y="661" font-size="14" font-weight="600" fill="#085041" text-anchor="middle">Health and cost</text>
-<text x="554" y="683" font-size="12" fill="#0F6E56" text-anchor="middle">dots and $ per run</text></g>
+<g><rect x="476" y="472" width="156" height="56" rx="4" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="554" y="493" font-size="14" font-weight="600" fill="#085041" text-anchor="middle">Health and cost</text>
+<text x="554" y="515" font-size="12" fill="#0F6E56" text-anchor="middle">dots and $ per run</text></g>
 
 <path d="M420 452 H540 V446" fill="none" stroke="#1D9E75" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
 <path d="M476 412 H446 V368 H428" fill="none" stroke="#1D9E75" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
-<path d="M420 568 H468" fill="none" stroke="#1D9E75" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
-<path d="M476 552 H452 V488 H428" fill="none" stroke="#1D9E75" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
-<path d="M420 676 H468" fill="none" stroke="#1D9E75" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
-
-<path d="M230 712 V730 H554 V744" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
-
-<g><rect x="476" y="752" width="156" height="56" rx="4" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
-<text x="554" y="773" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">MCP server</text>
-<text x="554" y="795" font-size="12" fill="#5F5E5A" text-anchor="middle">agent as tools</text></g>
+<path d="M420 676 H448 V500 H468" fill="none" stroke="#1D9E75" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
 
 <rect x="40" y="828" width="10" height="10" rx="2" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
 <text x="58" y="838" font-size="12" fill="#444441">Claude models</text>
