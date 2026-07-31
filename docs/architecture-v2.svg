@@ -1,6 +1,6 @@
 <svg width="680" viewBox="0 0 680 870" role="img" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
 <title>Job Agent architecture</title>
-<desc>Pipeline from scheduler through sources, filters, Haiku and Sonnet scoring to storage and outputs, with three feedback loops: reject cache, prompt mining, and source health.</desc>
+<desc>Pipeline from scheduler through sources, filters, Haiku first-pass and Opus second-opinion scoring to storage and outputs, with three feedback loops: reject cache, prompt mining, and source health.</desc>
 <defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
 <rect x="0" y="0" width="680" height="870" fill="#ffffff"/>
 
@@ -12,11 +12,11 @@
 <path d="M230 96 V112 H330 V128" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
 
 <g><rect x="40" y="136" width="180" height="64" rx="4" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
-<text x="130" y="161" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">ATS adapters · ~45</text>
+<text x="130" y="161" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">ATS adapters · 39</text>
 <text x="130" y="183" font-size="12" fill="#5F5E5A" text-anchor="middle">direct JSON + retry</text></g>
 
 <g><rect x="240" y="136" width="180" height="64" rx="4" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
-<text x="330" y="161" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">Browser path · ~26</text>
+<text x="330" y="161" font-size="14" font-weight="600" fill="#2C2C2A" text-anchor="middle">Browser path · 19</text>
 <text x="330" y="183" font-size="12" fill="#5F5E5A" text-anchor="middle">headless, once a day</text></g>
 
 <path d="M330 200 V232" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
@@ -41,8 +41,8 @@
 <path d="M230 500 V532" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
 
 <g><rect x="40" y="540" width="380" height="60" rx="4" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
-<text x="230" y="563" font-size="14" font-weight="600" fill="#3C3489" text-anchor="middle">Sonnet 4.6 — second opinion</text>
-<text x="230" y="585" font-size="12" fill="#534AB7" text-anchor="middle">rescores only above 70 · tailors on demand</text></g>
+<text x="230" y="563" font-size="14" font-weight="600" fill="#3C3489" text-anchor="middle">Opus 5 — second opinion</text>
+<text x="230" y="585" font-size="12" fill="#534AB7" text-anchor="middle">rescores only above 70 · Sonnet 5 tailors on demand</text></g>
 
 <path d="M230 600 V632" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
 
