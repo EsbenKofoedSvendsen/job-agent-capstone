@@ -40,6 +40,8 @@ export function decodeEntities(s) {
     .replace(/&quot;/g, '"')
     .replace(/&#0?39;|&#x27;|&rsquo;|&apos;/gi, "'")
     .replace(/&nbsp;/g, " ")
+    .replace(/&mdash;/g, "—")
+    .replace(/&ndash;/g, "–")
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
     .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));
 }
@@ -55,6 +57,40 @@ export function stripHtml(html) {
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+// Extract an annual base-salary range from free posting text (pay-transparency
+// laws mean most NYC/CA postings state one in the body). Deterministic, no AI.
+// Handles ranges ($150,000-$200,000 / $150K-$200K / "150,000 to 200,000") and
+// single values, normalizes &mdash;/&ndash; entities, decimals, and USD$/US$
+// prefixes. Guards on plausible annual magnitude ($30k-$1M) and requires a $
+// sign so it never catches employee counts, funding, or 401(k) figures.
+// Returns { min, max } (equal when a single value), or null.
+export function parseSalary(text) {
+  if (!text) return null;
+  const t = String(text)
+    .replace(/&mdash;|&ndash;|&#8212;|&#8211;|–|—/g, "-")
+    .replace(/&nbsp;/g, " ")
+    .replace(/US\$|USD\s?\$?|\$USD/gi, "$");
+  const num = (s, k) => {
+    let n = parseFloat(String(s).replace(/,/g, ""));
+    if (k) n *= 1000;
+    return n;
+  };
+  const R = /\$\s*(\d{2,3}(?:,\d{3})?)(?:\.\d{2})?\s*([kK])?\s*(?:-|to)\s*\$?\s*(\d{2,3}(?:,\d{3})?)(?:\.\d{2})?\s*([kK])?/;
+  const m = t.match(R);
+  if (m) {
+    const lo = num(m[1], m[2]);
+    const hi = num(m[3], m[4]);
+    if (lo >= 30000 && hi <= 1000000 && hi >= lo) return { min: lo, max: hi };
+  }
+  const S = /\$\s*(\d{2,3}(?:,\d{3})?)(?:\.\d{2})?\s*([kK])?\b/g;
+  let x, best = null;
+  while ((x = S.exec(t))) {
+    const n = num(x[1], x[2]);
+    if (n >= 40000 && n <= 1000000) best = best ? Math.max(best, n) : n;
+  }
+  return best ? { min: best, max: best } : null;
 }
 
 // Build a location filter from allowed places (e.g. ["New York"]). Returns null

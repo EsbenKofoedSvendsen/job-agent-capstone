@@ -34,11 +34,12 @@ export const config = {
         ? "https://api.openai.com/v1"
         : "https://api.anthropic.com/v1"),
     // Per-task model knobs. Extraction + first-pass scoring stay cheap (Haiku);
-    // tailoring + the confirm-pass use the strong model (Sonnet) by default.
+    // the confirm-pass uses Opus 4.8 (strongest calibration on the seniority /
+    // functional-mismatch calls the rubric leans on); tailoring stays on Sonnet.
     models: {
       extract: process.env.MODEL_EXTRACT || baseModel,
       score: process.env.MODEL_SCORE || baseModel,
-      rescore: process.env.MODEL_RESCORE || strongModel,
+      rescore: process.env.MODEL_RESCORE || "claude-opus-4-8",
       tailor: process.env.MODEL_TAILOR || strongModel,
     },
     // Cascade: any job the first pass scores ABOVE this gets re-scored by the

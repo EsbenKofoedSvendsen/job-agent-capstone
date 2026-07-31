@@ -4,14 +4,18 @@ import crypto from "node:crypto";
 import { config, aiConfigured } from "./config.js";
 import {
   getProfile, updateProfile, listJobs, getJob, updateJob, deleteJob, clearJobs,
+  deleteApplied, getSalaryInsights,
   setMeta, getMeta, logError, listErrors, clearErrors,
   getScheduleSettings, setScheduleSettings, getRescoreStats, getSourceHealth,
+  getScoringSettings, setScoringSettings,
+  getCalibrationProposal, clearCalibrationProposal, getRescoreBenchmark,
 } from "./db.js";
 import { runScrape, rescoreBoard, isScraping } from "./scraper.js";
-import { tailorApplication, scoreJobsBatch, extractRequirementSignal } from "./ai.js";
+import { tailorApplication, scoreJobsBatch, extractRequirementSignal, DEFAULT_SCORING_RUBRIC, DEFAULT_CALIBRATION_EXAMPLES } from "./ai.js";
 import { closeBrowser } from "./browser.js";
 import { fetchLatestCode } from "./twofa.js";
 import { startScheduler, stopScheduler, runScheduledScrape, sendPendingDigest, getSchedulerStatus, rescheduleScheduler } from "./scheduler.js";
+import { runCalibration, calibrationStatus } from "./calibrate.js";
 import { digestReady } from "./notify.js";
 
 const parseMeta = (v) => { try { return v ? JSON.parse(v) : null; } catch { return null; } };
@@ -45,7 +49,7 @@ if (config.appPassword) {
   // API is safe regardless of what the UI shows.
   app.use((req, res, next) => {
     if (req.role !== "viewer") return next();
-    if (req.method !== "GET" || req.path === "/api/scrape/stream" || req.path === "/api/profile") {
+    if (req.method !== "GET" || req.path === "/api/scrape/stream" || req.path === "/api/profile" || req.path === "/api/settings/scoring") {
       return res.status(403).json({ error: "Read-only demo access — this action is admin-only." });
     }
     next();
@@ -138,6 +142,62 @@ app.put("/api/settings/schedule", wrap((req, res) => {
   res.json(updated);
 }));
 
+// Live-editable scoring prompts: the rubric + one-shot calibration examples the
+// scorer applies to every job. GET returns the effective text (override or the
+// built-in default) plus the defaults so the UI can offer "reset to default".
+// Admin-only (viewers are blocked above).
+app.get("/api/settings/scoring", wrap((req, res) => {
+  const s = getScoringSettings();
+  res.json({
+    rubric: s.rubric || DEFAULT_SCORING_RUBRIC,
+    calibration: s.calibration || DEFAULT_CALIBRATION_EXAMPLES,
+    defaultRubric: DEFAULT_SCORING_RUBRIC,
+    defaultCalibration: DEFAULT_CALIBRATION_EXAMPLES,
+    usingDefaultRubric: !s.rubric,
+    usingDefaultCalibration: !s.calibration,
+  });
+}));
+app.put("/api/settings/scoring", wrap((req, res) => {
+  const b = req.body || {};
+  // Storing text that equals the built-in default (or is blank) = fall back to
+  // the default, so future default changes still flow through.
+  const norm = (v, def) =>
+    typeof v === "string" && v.trim() && v.trim() !== def.trim() ? v : "";
+  const saved = setScoringSettings({
+    rubric: norm(b.rubric, DEFAULT_SCORING_RUBRIC),
+    calibration: norm(b.calibration, DEFAULT_CALIBRATION_EXAMPLES),
+  });
+  res.json({
+    rubric: saved.rubric || DEFAULT_SCORING_RUBRIC,
+    calibration: saved.calibration || DEFAULT_CALIBRATION_EXAMPLES,
+    usingDefaultRubric: !saved.rubric,
+    usingDefaultCalibration: !saved.calibration,
+  });
+}));
+
+// Biweekly auto-calibration (Opus proposes new one-shot anchors; admin adopts).
+// GET: current pending proposal + cadence. POST /run: trigger now (force). POST
+// /adopt: apply the proposal to the live calibration. POST /dismiss: drop it.
+// All admin-only (POSTs blocked for viewers; GET is harmless status).
+app.get("/api/calibration", wrap((req, res) => {
+  res.json({ status: calibrationStatus(), proposal: getCalibrationProposal() });
+}));
+app.post("/api/calibration/run", wrap(async (req, res) => {
+  const result = await runCalibration({ force: true });
+  res.json(result);
+}));
+app.post("/api/calibration/adopt", wrap((req, res) => {
+  const p = getCalibrationProposal();
+  if (!p || !p.proposedCalibration) return res.status(404).json({ error: "no pending proposal" });
+  const saved = setScoringSettings({ calibration: p.proposedCalibration });
+  clearCalibrationProposal();
+  res.json({ ok: true, adopted: true, calibration: saved.calibration });
+}));
+app.post("/api/calibration/dismiss", wrap((req, res) => {
+  clearCalibrationProposal();
+  res.json({ ok: true, dismissed: true });
+}));
+
 // --- jobs -----------------------------------------------------------------
 // Viewers see the board but never the owner's tailored documents.
 const redactJob = (req, j) =>
@@ -160,6 +220,13 @@ app.patch("/api/jobs/:id", wrap((req, res) => {
 // Clear the whole board (keeps your profile/settings).
 app.delete("/api/jobs", wrap((req, res) => {
   const removed = clearJobs();
+  res.json({ ok: true, removed });
+}));
+
+// Remove only jobs already marked applied. MUST precede "/api/jobs/:id" so the
+// literal path wins over the :id param.
+app.delete("/api/jobs/applied", wrap((req, res) => {
+  const removed = deleteApplied();
   res.json({ ok: true, removed });
 }));
 
@@ -236,6 +303,11 @@ app.get("/api/scrape/stream", async (req, res) => {
 
 // --- rescore impact (Sonnet vs Haiku deltas) ------------------------------
 app.get("/api/rescore-stats", wrap((req, res) => res.json(getRescoreStats())));
+
+app.get("/api/salary-insights", wrap((req, res) => res.json(getSalaryInsights())));
+
+// Sonnet-vs-Opus benchmark from the one-time board re-score onto Opus 4.8.
+app.get("/api/rescore-benchmark", wrap((req, res) => res.json(getRescoreBenchmark())));
 
 app.get("/api/sources/health", wrap((req, res) => res.json(getSourceHealth())));
 

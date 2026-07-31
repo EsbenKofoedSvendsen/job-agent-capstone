@@ -9,6 +9,9 @@ import { config, aiConfigured } from "./config.js";
 import { runScrape, isScraping } from "./scraper.js";
 import { sendJobDigest, digestReady } from "./notify.js";
 import { setMeta, getScheduleSettings, unnotifiedHighScore, markNotified } from "./db.js";
+import { runCalibration, calibrationDue } from "./calibrate.js";
+
+let calibrating = false; // in-flight guard so ticks can't start overlapping runs
 
 // Email every high-scoring job that hasn't been emailed yet (manual OR
 // scheduled scrapes feed this), then mark them. Marks only AFTER a successful
@@ -69,6 +72,19 @@ function computeNextRunAt() {
 // chained setTimeout) — the interval keeps firing and the lock prevents overlap.
 async function tick() {
   computeNextRunAt(); // keep the dashboard countdown fresh
+
+  // Biweekly auto-calibration. Fire-and-forget (never blocks a scrape slot); runs
+  // only when idle and AI is up, guarded so ticks can't stack runs. Not gated by
+  // skipDays — weekends are a fine, scrape-free time to propose new anchors.
+  if (!calibrating && !isScraping() && aiConfigured() && calibrationDue()) {
+    calibrating = true;
+    console.log("[scheduler] auto-calibration due — proposing new scoring anchors…");
+    runCalibration({})
+      .then((r) => console.log(`[scheduler] calibration: ${r?.ok ? "proposal stored" : (r?.skipped || r?.error || "no proposal")}`))
+      .catch((e) => console.error("[scheduler] calibration failed:", e?.message || e))
+      .finally(() => { calibrating = false; });
+  }
+
   const { times, skipDays } = getScheduleSettings();
   const now = new Date();
   if (skipDays.includes(now.getDay())) return; // quiet day

@@ -25,7 +25,7 @@
       </button>
       <button id="btn-report" class="btn btn-ghost hidden">Report</button>
       <button id="btn-applied" class="btn btn-ghost">✓ Applied</button>
-      <button id="btn-rescore-impact" class="btn btn-ghost">📊 Sonnet impact</button>
+      <button id="btn-rescore-impact" class="btn btn-ghost">📊 Opus impact</button>
       <button id="btn-errors" class="btn btn-ghost">⚠ Errors</button>
       <button id="btn-clear" class="btn btn-ghost" title="Remove all jobs from the board">🗑 Clear board</button>
       <button id="btn-settings" class="btn btn-ghost">⚙ Settings</button>
@@ -36,9 +36,27 @@
   <main id="view-dashboard" class="container">
     <section class="scrape-status" id="scrape-status"></section>
     <section class="metrics" id="metrics"></section>
+    <section id="salary-card" class="panel hidden" style="margin-bottom:1.25rem">
+      <h3 style="margin:0 0 2px">Estimated market value <span id="salary-cov" class="hint"></span></h3>
+      <p class="hint" style="margin:0 0 8px">Salary range of board jobs within a match-score window (midpoints; band = typical low–high). NYC, ex-equity.</p>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; font-size:13px">
+        <span class="hint">Match score</span>
+        <input type="number" id="salary-min" min="0" max="100" step="5" value="70" style="width:72px" title="Minimum match score"/>
+        <span class="hint">to</span>
+        <input type="number" id="salary-max" min="0" max="100" step="5" value="100" style="width:72px" title="Maximum match score"/>
+      </div>
+      <div id="salary-rows"></div>
+    </section>
     <section class="filterbar">
       <input type="text" id="filter-location" placeholder="Filter by location… (e.g. New York)" />
-      <select id="filter-company"><option value="">All companies</option></select>
+      <div class="dd" id="company-dd">
+        <button id="filter-company-btn" class="btn" type="button">All companies ▾</button>
+        <div id="company-menu" class="dd-menu hidden">
+          <input type="text" id="company-search" placeholder="Search companies…" />
+          <div class="dd-actions"><span class="hint">Pick any number</span><button id="company-clear" class="btn btn-ghost small" type="button">Clear</button></div>
+          <div id="company-list" class="dd-list"></div>
+        </div>
+      </div>
       <select id="filter-posted">
         <option value="">Any date</option>
         <option value="1">Posted last 24h</option>
@@ -57,7 +75,9 @@
         <option value="score">Sort: Best match</option>
         <option value="newest">Sort: Newest posted</option>
         <option value="scraped">Sort: Recently scraped</option>
+        <option value="scraped_score">Sort: Latest scrape · best match</option>
       </select>
+      <label class="dd-item" style="border:1px solid var(--border,#e2e8f0); border-radius:8px; padding:6px 10px"><input type="checkbox" id="filter-hide-actioned" checked/> Hide applied &amp; rejected</label>
       <button id="filter-clear" class="btn btn-ghost small">Clear</button>
       <span id="filter-count" class="hint"></span>
     </section>
@@ -139,7 +159,7 @@
         <button id="btn-add-time" class="btn btn-ghost small">+ Add time</button>
         <label style="margin-top:12px">Email me jobs scoring ≥ <span class="hint">(0–100)</span></label>
         <input type="number" id="sch-digest" min="0" max="100" step="1" style="max-width:120px" />
-        <label style="margin-top:12px">Re-score with Sonnet above <span class="hint">(0–100; higher = fewer Sonnet calls = cheaper)</span></label>
+        <label style="margin-top:12px">Re-score with Opus above <span class="hint">(0–100; higher = fewer Opus calls = cheaper)</span></label>
         <input type="number" id="sch-rescore" min="0" max="100" step="1" style="max-width:120px" />
         <label style="margin-top:12px">Pause scraping on</label>
         <div id="sch-days" class="sched-days"></div>
@@ -173,6 +193,30 @@
         <div id="scoretest-result"></div>
       </section>
 
+      <section class="panel panel-wide">
+        <h3>Scoring prompts <span class="hint">(rubric &amp; one-shot calibration)</span></h3>
+        <p class="hint">The rubric and calibration examples the scorer applies to every job. Edits apply live to the next scrape or board re-score — no redeploy. Leave a box blank (or hit Reset) to fall back to the built-in default. <b>Test changes in “Score a job” above before a full re-score.</b></p>
+        <label>Scoring rubric</label>
+        <textarea id="f-scoring-rubric" class="mono" rows="16" placeholder="Loading…"></textarea>
+        <label style="margin-top:12px">Calibration examples <span class="hint">(one-shot anchors)</span></label>
+        <textarea id="f-scoring-calibration" class="mono" rows="12" placeholder="Loading…"></textarea>
+        <div class="row" style="margin-top:12px">
+          <button id="btn-save-scoring" class="btn btn-primary">Save scoring prompts</button>
+          <button id="btn-reset-scoring" class="btn btn-ghost">Reset to default</button>
+          <span id="scoring-status" class="hint"></span>
+        </div>
+      </section>
+
+      <section class="panel panel-wide">
+        <h3>Auto-calibration <span class="hint">(Opus 4.8 · every 2 weeks)</span></h3>
+        <p class="hint">Every ~2 weeks Opus proposes improved one-shot calibration anchors from the jobs you've <b>applied to / rejected</b>, then A/B-evals the proposal. Built not to drift toward a flat mean: it anchors on your real decisions, <b>preserves the score poles</b>, and any proposal that shrinks the score spread <b>fails the gate</b>. Nothing changes your scoring until you click Adopt.</p>
+        <div class="row" style="margin-bottom:8px">
+          <button id="btn-calib-run" class="btn btn-ghost">Run calibration now</button>
+          <span id="calib-status" class="hint"></span>
+        </div>
+        <div id="calib-proposal"></div>
+      </section>
+
     </div>
 
     <div class="settings-actions">
@@ -185,7 +229,10 @@
   <main id="view-applied" class="container hidden">
     <div class="settings-head">
       <h1>Applied jobs <span id="applied-count" class="hint"></span></h1>
-      <button id="btn-applied-back" class="btn btn-ghost">← Back to pipeline</button>
+      <div style="display:flex; gap:8px">
+        <button id="btn-remove-applied" class="btn btn-danger hidden">🗑 Remove all applied</button>
+        <button id="btn-applied-back" class="btn btn-ghost">← Back to pipeline</button>
+      </div>
     </div>
     <div id="applied-list" class="applied-list"></div>
   </main>
@@ -193,10 +240,10 @@
   <!-- RESCORE IMPACT -->
   <main id="view-rescore" class="container hidden">
     <div class="settings-head">
-      <h1>Sonnet rescore impact <span id="rescore-count" class="hint"></span></h1>
+      <h1>Opus rescore impact <span id="rescore-count" class="hint"></span></h1>
       <button id="btn-rescore-back" class="btn btn-ghost">← Back to pipeline</button>
     </div>
-    <p class="hint">How much the Sonnet confirm-pass moves scores vs. the cheap Haiku first pass. Flat bars near 0 mean the cascade is changing little (and may not be worth the cost); wide spread means it's doing real work.</p>
+    <p class="hint">How much the Opus confirm-pass moves scores vs. the cheap Haiku first pass. Flat bars near 0 mean the cascade is changing little (and may not be worth the cost); wide spread means it's doing real work.</p>
     <div id="rescore-summary" class="metrics"></div>
     <div id="rescore-chart" class="panel" style="padding:16px;margin-top:14px"></div>
     <div id="rescore-biggest" style="margin-top:14px"></div>

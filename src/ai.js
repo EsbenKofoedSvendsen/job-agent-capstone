@@ -3,7 +3,7 @@
 // No SDK dependency.
 import { config } from "./config.js";
 import { chunk, tierFor, mapWithConcurrency } from "./util.js";
-import { getScheduleSettings, logRescore } from "./db.js";
+import { getScheduleSettings, getScoringSettings, logRescore } from "./db.js";
 
 const { provider, apiKey, model, baseUrl } = config.ai;
 
@@ -38,8 +38,16 @@ function extractJson(text) {
 // (output_config.format json_schema): the response is guaranteed schema-valid
 // JSON, so we JSON.parse it directly — no regex extraction, no parse-failure
 // fallbacks. The OpenAI-compatible path ignores it (keeps json_object mode).
-async function rawCall({ system, user, cachePrefix = null, maxTokens = 2000, json = true, schema = null, model: modelOverride = model }) {
+async function rawCall({ system, user, cachePrefix = null, maxTokens = 2000, json = true, schema = null, model: modelOverride = model, temperature = null, top_p = null }) {
   if (!apiKey) throw new Error("AI_API_KEY is not set (see .env).");
+
+  // Newer Claude models (Opus 4.7/4.8, Sonnet 5, Fable/Mythos 5) reject sampling
+  // params with a 400. Strip them centrally so a temperature set for the cheap
+  // models never breaks a call routed to a strong model (e.g. the Opus rescore).
+  if (/opus-4-[78]|opus-5|sonnet-5|fable-5|mythos-5/.test(modelOverride || "")) {
+    temperature = null;
+    top_p = null;
+  }
 
   if (provider === "anthropic") {
     const userContent = cachePrefix
@@ -53,6 +61,8 @@ async function rawCall({ system, user, cachePrefix = null, maxTokens = 2000, jso
     const messages = [{ role: "user", content: userContent }];
     const body = { model: modelOverride, max_tokens: maxTokens, system, messages };
     if (schema && json) body.output_config = { format: { type: "json_schema", schema } };
+    if (temperature != null) body.temperature = temperature;
+    if (top_p != null) body.top_p = top_p;
     const res = await fetch(`${baseUrl}/messages`, {
       method: "POST",
       headers: {
@@ -94,6 +104,8 @@ async function rawCall({ system, user, cachePrefix = null, maxTokens = 2000, jso
         { role: "user", content: fullUser },
       ],
       ...(json ? { response_format: { type: "json_object" } } : {}),
+      ...(temperature != null ? { temperature } : {}),
+      ...(top_p != null ? { top_p } : {}),
     }),
     signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
@@ -306,28 +318,10 @@ export function minYearsRequired(desc) {
 //    with a given model; `scoreJobsBatch` runs the cheap pass then escalates the
 //    promising jobs to the stronger model (cascade).
 // ---------------------------------------------------------------------------
-async function scorePass(jobs, profile, scoreModel) {
-  const batchSize = config.scrape.scoreBatchSize;
-  const resume = (profile.base_resume_text ?? "").slice(0, 8000);
-  const prefs = JSON.stringify(profile.target_preferences ?? {});
-  const rejected = (profile.negative_feedback_corpus ?? []).slice(0, 12).join(" | ");
-
-  const system =
-    "You are a meticulous, realistic recruiter screening jobs for ONE candidate, like an ATS reviewer. " +
-    "Seniority and years-of-experience fit is a primary, often decisive axis — never let topical or domain " +
-    "overlap rescue a candidate who is under- or over-qualified. But do NOT suppress genuine matches: when " +
-    "the candidate clearly meets the role's level and the substance overlaps, score it high. Respond with JSON only.";
-
-  // Static across every batch -> cached prefix so prompt caching skips re-billing
-  // the resume/rubric each call.
-  const cachePrefix = `CANDIDATE RESUME:
-${resume}
-
-TARGET PREFERENCES: ${prefs}
-
-PREVIOUSLY REJECTED (penalize similar): ${rejected || "none"}
-
-SCORING RUBRIC
+// Built-in scoring guidance. These are the defaults the scorer uses unless an
+// admin overrides them in Settings (persisted via getScoringSettings). Exported
+// so the settings endpoint can show them and offer "reset to default".
+export const DEFAULT_SCORING_RUBRIC = `SCORING RUBRIC
 1. Infer the candidate's total years of experience and seniority level from the resume.
 2. For each job, read its required experience: explicit minimums (e.g. "8+ years", "5-7 years", the
    "Stated experience requirement" line) AND the title's level
@@ -361,9 +355,9 @@ SCORING RUBRIC
    - 85-100: at the candidate's level with strong overlap on the role's core responsibilities (niche-domain
      gaps are fine). Award this freely — do NOT withhold it from genuine matches.
    - 70-84: solid but with a real CORE gap (different primary function, materially off-level, or thin evidence).
-   - 50-69: weak/partial.  0-49: poor.
+   - 50-69: weak/partial.  0-49: poor.`;
 
-CALIBRATION EXAMPLES (anchor your scoring to these):
+export const DEFAULT_CALIBRATION_EXAMPLES = `CALIBRATION EXAMPLES (anchor your scoring to these):
 - "VP, Product Strategy" at a bank, stated "5-8 years experience": the stated range includes the candidate
   (~5 years) despite the VP title (finance titles run senior) -> IN REACH; strong core overlap in
   strategy/product/stakeholder leadership -> 88.
@@ -377,7 +371,40 @@ CALIBRATION EXAMPLES (anchor your scoring to these):
 - "Senior Manager, Data Science" requiring 7+ years of DS/engineering: no engineering or data-science
   background -> FUNCTIONAL MISMATCH -> 18, despite strong analytics and stakeholder skills.
 - When a role requires "N+ years of product management": count the candidate's FULL years of product AND
-  strategy work combined (~5), not only explicitly-titled product roles — do not under-credit to ~2.5.
+  strategy work combined (~5), not only explicitly-titled product roles — do not under-credit to ~2.5.`;
+
+async function scorePass(jobs, profile, scoreModel, calibrationOverride = null) {
+  const batchSize = config.scrape.scoreBatchSize;
+  const resume = (profile.base_resume_text ?? "").slice(0, 8000);
+  const prefs = JSON.stringify(profile.target_preferences ?? {});
+  const rejected = (profile.negative_feedback_corpus ?? []).slice(0, 12).join(" | ");
+
+  const system =
+    "You are a meticulous, realistic recruiter screening jobs for ONE candidate, like an ATS reviewer. " +
+    "Seniority and years-of-experience fit is a primary, often decisive axis — never let topical or domain " +
+    "overlap rescue a candidate who is under- or over-qualified. But do NOT suppress genuine matches: when " +
+    "the candidate clearly meets the role's level and the substance overlaps, score it high. Respond with JSON only.";
+
+  // The rubric + one-shot calibration are live-editable in Settings; fall back to
+  // the built-in defaults whenever no override is saved (or it's blank).
+  const sc = getScoringSettings();
+  const rubric = sc.rubric && sc.rubric.trim() ? sc.rubric : DEFAULT_SCORING_RUBRIC;
+  const calibration = calibrationOverride && calibrationOverride.trim()
+    ? calibrationOverride
+    : (sc.calibration && sc.calibration.trim() ? sc.calibration : DEFAULT_CALIBRATION_EXAMPLES);
+
+  // Static across every batch -> cached prefix so prompt caching skips re-billing
+  // the resume/rubric each call.
+  const cachePrefix = `CANDIDATE RESUME:
+${resume}
+
+TARGET PREFERENCES: ${prefs}
+
+PREVIOUSLY REJECTED (penalize similar): ${rejected || "none"}
+
+${rubric}
+
+${calibration}
 
 In match_reasoning, state the role's level / required years vs the candidate's level and the decisive factor.`;
 
@@ -403,7 +430,9 @@ ${list}`;
 
     let parsed;
     try {
-      parsed = await call({ system, user, cachePrefix, maxTokens: 4000, json: true, schema: SCORE_SCHEMA, model: scoreModel });
+      // temperature 0: scoring is a grading task — deterministic, reproducible
+      // scores (and a noise-free calibration eval), not sampled variety.
+      parsed = await call({ system, user, cachePrefix, maxTokens: 4000, json: true, schema: SCORE_SCHEMA, model: scoreModel, temperature: 0 });
     } catch {
       parsed = null;
     }
@@ -475,6 +504,72 @@ export async function scoreJobsBatch(jobs, profile) {
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// 2b. Auto-calibration support. A single cheap pass with an explicit one-shot
+//     calibration override lets the biweekly calibrator A/B a *proposed* set
+//     against the current one on a fixed eval set, without touching live
+//     scoring settings. `proposeCalibration` asks Opus for an improved set.
+// ---------------------------------------------------------------------------
+export async function scoreForEval(jobs, profile, calibrationText) {
+  return scorePass(jobs, profile, config.ai.models.score, calibrationText || null);
+}
+
+const PROPOSE_CALIBRATION_SCHEMA = {
+  type: "object",
+  properties: {
+    calibration: { type: "string" },
+    rationale: { type: "string" },
+  },
+  required: ["calibration", "rationale"],
+  additionalProperties: false,
+};
+
+// Ask Opus to propose an improved CALIBRATION EXAMPLES block. The prompt bakes in
+// the anti-collapse rules (preserve the poles, keep/widen the spread, correct the
+// residuals rather than the consensus); the caller still A/B-evals + gates the
+// result, so this is defense in depth, not blind trust.
+export async function proposeCalibration({ currentCalibration, resume, signal }) {
+  const system =
+    "You are a calibration engineer tuning the one-shot CALIBRATION EXAMPLES block that anchors a " +
+    "recruiter-style model scoring jobs 0-100 for ONE candidate. Improve the anchors from evidence of where " +
+    "the model disagreed with the candidate's real decisions — WITHOUT compressing the score distribution " +
+    "toward the middle. Respond with JSON only.";
+  const user = `CANDIDATE (résumé):
+${(resume || "").slice(0, 3500)}
+
+CURRENT CALIBRATION EXAMPLES:
+${currentCalibration}
+
+EVIDENCE — the model's residual errors vs. the candidate's ground-truth actions:
+A. APPLIED to, but model UNDER-scored (these deserve HIGH scores, ~80+):
+${signal.appliedUnderscored || "  (none)"}
+B. REJECTED, but model OVER-scored (these deserve LOWER scores):
+${signal.rejectedOverscored || "  (none)"}
+C. Largest cheap-vs-strong model disagreements (SECONDARY — model-vs-model, do not over-fit):
+${signal.cascade || "  (none)"}
+
+HARD RULES — these exist specifically to stop the calibration collapsing to a flat mean over cycles:
+1. PRESERVE THE POLES. Keep at least one anchor scoring >=85 (a near-perfect match — the realistic ceiling; do
+   NOT inflate to 95+), at least one <=15 (a clear functional mismatch), and at least one in the 50-55 hard-cap
+   band (clearly over-qualified). Never soften these toward the center.
+2. WIDEN, DON'T NARROW. Anchor scores must span the full 0-100 range; the standard deviation of your anchors'
+   scores must be >= the current set's. Do NOT cluster new anchors near the median.
+3. CORRECT RESIDUALS, NOT THE CONSENSUS. Add/adjust anchors that fix the specific disagreements in A and B.
+   Do not average toward what the model already does.
+4. BOUNDED CHANGE. Keep 6-10 anchors total; modify or add at most 3 per cycle; keep the rest intact.
+5. FORMAT: identical to the current block — a header line then "- \\"Title\\" ...context... -> NN." one per
+   line, each ending in an explicit integer score.
+
+Return JSON {"calibration":"<full replacement block>","rationale":"<2-4 sentences: what changed, why, and how it preserves/widens spread>"}.`;
+  const parsed = await call({
+    system, user, maxTokens: 3000, json: true,
+    // No temperature/top_p: Opus 4.8 rejects sampling params (400). Exploration
+    // comes from the model itself; the eval + manual adoption gate the result.
+    schema: PROPOSE_CALIBRATION_SCHEMA, model: "claude-opus-4-8",
+  });
+  return { calibration: (parsed?.calibration || "").trim(), rationale: (parsed?.rationale || "").trim() };
 }
 
 // ---------------------------------------------------------------------------

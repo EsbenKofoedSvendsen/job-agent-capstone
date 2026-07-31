@@ -7,9 +7,9 @@
 //   • Assets (images/fonts/css) blocked at the network layer.
 //   • Scoring is BATCHED (many jobs per AI call) and deduping is done in
 //     memory against one upfront snapshot — no per-job DB round-trips.
-import { newScrapeContext } from "./browser.js";
+import { newScrapeContext, closeBrowser } from "./browser.js";
 import { extractJobs, scoreJobsBatch, minYearsRequired, beginUsageCapture, endUsageCapture } from "./ai.js";
-import { mapWithConcurrency, buildLocationMatcher } from "./util.js";
+import { mapWithConcurrency, buildLocationMatcher, parseSalary } from "./util.js";
 import { config } from "./config.js";
 import {
   getProfile, existingJobKeys, insertJob, listJobs, updateJob, deleteJob,
@@ -184,7 +184,13 @@ function companyFromUrl(url) {
 // ---------------------------------------------------------------------------
 // Main entry. `onEvent` receives {type, ...} progress messages for SSE.
 // ---------------------------------------------------------------------------
-const SCRAPE_MAX_MS = 18 * 60 * 1000; // backstop: a single scrape can't run longer
+// Backstop so a wedged run can't hold the lock forever. Raised 18→30 min:
+// the once-daily browser-path slot (07:00) legitimately runs ~18.5 min and was
+// tripping the old 18-min limit right at the finish — the work completed and
+// jobs were inserted, but the caller had already thrown, so last_scrape_auto
+// never updated and the digest step was skipped. 30 min gives real headroom
+// while still guaranteeing the lock releases well before the next slot.
+const SCRAPE_MAX_MS = 30 * 60 * 1000;
 
 let scrapeInFlight = false;
 export function isScraping() {
@@ -204,6 +210,14 @@ export async function runScrape(opts = {}) {
   });
   try {
     return await Promise.race([runScrapeInner(opts), timeout]);
+  } catch (e) {
+    // A watchdog abort only abandons the promise — the underlying scrape and
+    // its Chromium keep running in the background. Force-kill the shared
+    // browser so a wedged run can't hold memory and hang every later slot
+    // (observed 2026-07-06: one stuck 07:00 run left 8 zombie Chromium
+    // processes and poisoned the whole day's schedule).
+    closeBrowser().catch(() => {});
+    throw e;
   } finally {
     clearTimeout(watchdog);
     scrapeInFlight = false;
@@ -424,8 +438,13 @@ async function runScrapeInner({ urls, onEvent = () => {}, scheduled = false } = 
         continue;
       }
       const status = s.tier === "TIER_3" ? "SCRAPED" : "PENDING_APPROVAL";
+      // Fallback salary capture: if the adapter/AI didn't supply a range, parse
+      // one from the description text (deterministic, free). Never overrides an
+      // explicit value.
+      const sal = job.salary_min == null && job.salary_max == null ? parseSalary(job.job_description_raw) : null;
       const id = insertJob({
         ...job,
+        ...(sal ? { salary_min: sal.min, salary_max: sal.max, salary_currency: job.salary_currency || "USD", salary_period: job.salary_period || "year" } : {}),
         match_percentage: s.match_percentage,
         match_reasoning: s.match_reasoning,
         tier: s.tier,

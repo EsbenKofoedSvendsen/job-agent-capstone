@@ -6,7 +6,8 @@ const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 
 const state = { jobs: [], profile: null, lastReports: null, scraping: false,
   status: null, nextRunAt: null, errors: [], schedule: null, rescore: null, rescoreBucket: null,
-  filters: { location: "", company: "", posted: "", scraped: "", minScore: "", sort: "score" } };
+  companyQuery: "", salaryOpen: null,
+  filters: { location: "", companies: [], posted: "", scraped: "", minScore: "", sort: "score", hideActioned: true } };
 
 // --- tiny helpers ----------------------------------------------------------
 async function api(method, url, body) {
@@ -125,6 +126,52 @@ function tickCountdown() {
 async function loadJobs() {
   state.jobs = await api("GET", "/api/jobs");
   render();
+  renderSalaryInsights();
+}
+
+// Market-value card: base-salary ranges of board jobs, bucketed by match level.
+// Interactive market-value card: user sets a match-score window, sees the
+// salary distribution of board jobs in it. Computed client-side from the jobs
+// already loaded (each carries salary_min/max + match_percentage).
+function renderSalaryInsights() {
+  const card = $("#salary-card");
+  if (!card) return;
+  const priced = state.jobs.filter((x) => x.status !== "REJECTED" && x.salary_min != null && x.salary_max != null);
+  const totalNonRej = state.jobs.filter((x) => x.status !== "REJECTED").length;
+  if (!priced.length) { card.classList.add("hidden"); return; }
+  card.classList.remove("hidden");
+  const clamp = (v, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : d; };
+  const lo = clamp($("#salary-min")?.value, 70);
+  let hi = clamp($("#salary-max")?.value, 100);
+  if (hi < lo) hi = lo;
+  $("#salary-cov").textContent = `· ${priced.length} of ${totalNonRej} board jobs have a stated range`;
+  const inRange = priced
+    .filter((x) => { const m = x.match_percentage || 0; return m >= lo && m <= hi; })
+    .map((x) => ({ ...x, mid: (x.salary_min + x.salary_max) / 2 }))
+    .sort((a, b) => b.mid - a.mid);
+  const k = (n) => (n == null ? "—" : "$" + Math.round(n / 1000) + "k");
+  const pctOf = (vals, p) => { if (!vals.length) return null; const s = [...vals].sort((a, b) => a - b); return s[Math.floor((s.length - 1) * p)]; };
+  if (!inRange.length) { $("#salary-rows").innerHTML = `<p class="hint">No priced jobs in the ${lo}–${hi} match window.</p>`; return; }
+  const mid = pctOf(inRange.map((x) => x.mid), 0.5);
+  const p25 = pctOf(inRange.map((x) => x.mid), 0.25);
+  const p75 = pctOf(inRange.map((x) => x.mid), 0.75);
+  const bandLo = pctOf(inRange.map((x) => x.salary_min), 0.5);
+  const bandHi = pctOf(inRange.map((x) => x.salary_max), 0.5);
+  const open = !!state.salaryOpen;
+  const list = open
+    ? `<div style="margin:6px 0 4px 4px; border-left:2px solid var(--border,#e2e8f0); padding-left:12px">` +
+      inRange.map((x) =>
+        `<div class="kv" style="gap:8px"><span style="width:44px" class="hint">${x.match_percentage}%</span>` +
+        `<span>${k(x.salary_min)}–${k(x.salary_max)} <span class="hint">· ${esc(x.company_name)} — ${esc((x.job_title || "").slice(0, 48))}</span></span></div>`
+      ).join("") + `</div>`
+    : "";
+  $("#salary-rows").innerHTML =
+    `<div id="salary-headline" style="cursor:pointer; padding:2px 0" title="Click to see the ${inRange.length} jobs">
+       <b style="font-size:18px">${k(mid)}</b> midpoint
+       <span class="hint">· ${k(p25)}–${k(p75)} typical · band ${k(bandLo)}–${k(bandHi)} · n=${inRange.length} at ${lo}–${hi}% match · ${open ? "▾ hide" : "▸ show"} jobs</span>
+     </div>${list}`;
+  const h = $("#salary-headline");
+  if (h) h.onclick = () => { state.salaryOpen = !state.salaryOpen; renderSalaryInsights(); };
 }
 function render() {
   const j = state.jobs;
@@ -149,20 +196,42 @@ function render() {
       : `<p class="empty">No jobs match.</p>`;
   }
   $$(".card").forEach((c) => (c.onclick = () => openDrawer(c.dataset.id)));
-  const anyFilter = state.filters.location || state.filters.company || state.filters.posted || state.filters.scraped || state.filters.minScore;
+  const anyFilter = state.filters.location || state.filters.companies.length || state.filters.posted || state.filters.scraped || state.filters.minScore;
   $("#filter-count").textContent = anyFilter ? `Showing ${filtered.length} of ${j.length}` : `${j.length} jobs`;
 }
 
-// Keep the company dropdown in sync with whatever companies are on the board,
-// preserving the current selection.
+// Keep the company multi-select in sync with whatever companies are on the
+// board, preserving current selections. Checkboxes so several companies can
+// be active at once; a search box because the board spans ~90 companies.
 function syncCompanyOptions(jobs) {
-  const sel = $("#filter-company");
-  if (!sel) return;
-  const companies = [...new Set(jobs.map((x) => x.company_name).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  const current = sel.value;
-  sel.innerHTML = `<option value="">All companies</option>` +
-    companies.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
-  if (companies.includes(current)) sel.value = current;
+  const list = $("#company-list");
+  if (!list) return;
+  const counts = new Map();
+  for (const x of jobs) if (x.company_name) counts.set(x.company_name, (counts.get(x.company_name) || 0) + 1);
+  state.filters.companies = state.filters.companies.filter((c) => counts.has(c));
+  const q = (state.companyQuery || "").trim().toLowerCase();
+  const companies = [...counts.keys()].sort((a, b) => a.localeCompare(b))
+    .filter((c) => !q || c.toLowerCase().includes(q));
+  list.innerHTML = companies.map((c) =>
+    `<label class="dd-item"><input type="checkbox" data-company="${esc(c)}"${state.filters.companies.includes(c) ? " checked" : ""}/><span>${esc(c)}</span><span class="dd-count">${counts.get(c)}</span></label>`
+  ).join("") || `<div class="hint" style="padding:6px">No matching companies</div>`;
+  list.querySelectorAll("input[data-company]").forEach((cb) => {
+    cb.onchange = () => {
+      const set = new Set(state.filters.companies);
+      cb.checked ? set.add(cb.dataset.company) : set.delete(cb.dataset.company);
+      state.filters.companies = [...set];
+      render();
+    };
+  });
+  updateCompanyButton();
+}
+function updateCompanyButton() {
+  const btn = $("#filter-company-btn");
+  if (!btn) return;
+  const sel = state.filters.companies;
+  btn.textContent = sel.length === 0 ? "All companies ▾"
+    : sel.length === 1 ? `${sel[0]} ▾`
+    : `${sel.length} companies ▾`;
 }
 
 // Epoch ms for a field, 0 when missing/invalid.
@@ -173,9 +242,11 @@ function tsOf(iso) {
 // Date key (posted_at, falling back to scraped_at) for tie-breaks / "newest".
 function dateKey(x) { return tsOf(x.posted_at || x.scraped_at); }
 // Sort jobs by the chosen order:
-//   score   = highest match first (relevancy), tie-broken by newest
-//   newest  = most recently posted first (backend's default order)
-//   scraped = most recently scraped first
+//   score         = highest match first (relevancy), tie-broken by newest
+//   newest        = most recently posted first (backend's default order)
+//   scraped       = most recently scraped first
+//   scraped_score = most recent scrape day first, then highest match within it
+//                   ("latest scrape" and "best match" applied simultaneously)
 function sortJobs(jobs) {
   const arr = jobs.slice();
   const sort = state.filters.sort || "score";
@@ -183,6 +254,12 @@ function sortJobs(jobs) {
     arr.sort((a, b) => (b.match_percentage - a.match_percentage) || (dateKey(b) - dateKey(a)));
   } else if (sort === "scraped") {
     arr.sort((a, b) => tsOf(b.scraped_at) - tsOf(a.scraped_at));
+  } else if (sort === "scraped_score") {
+    const day = (x) => String(x.scraped_at || "").slice(0, 10); // YYYY-MM-DD bucket = one scrape day
+    arr.sort((a, b) =>
+      day(b).localeCompare(day(a)) ||
+      (b.match_percentage - a.match_percentage) ||
+      (dateKey(b) - dateKey(a)));
   }
   return arr;
 }
@@ -196,8 +273,9 @@ function applyFilters(jobs) {
   const scrapedCutoff = Number.isFinite(scrapedDays) ? Date.now() - scrapedDays * 86400000 : null;
   const minScore = parseInt(f.minScore, 10);
   return jobs.filter((x) => {
+    if (f.hideActioned && (x.status === "APPLIED" || x.status === "REJECTED")) return false;
     if (loc && !(x.location || "").toLowerCase().includes(loc)) return false;
-    if (f.company && x.company_name !== f.company) return false;
+    if (f.companies.length && !f.companies.includes(x.company_name)) return false;
     if (cutoff) {
       const d = x.posted_at || x.scraped_at;
       if (!d || new Date(d).getTime() < cutoff) return false;
@@ -235,8 +313,26 @@ function card(j) {
 
 // --- drawer ----------------------------------------------------------------
 async function openDrawer(id) {
-  const { job, log } = await api("GET", `/api/jobs/${id}`);
+  const { job, log, rescore } = await api("GET", `/api/jobs/${id}`);
   const terminal = ["APPLIED", "REJECTED"].includes(job.status);
+
+  // Cascade re-score effect: what the fast first pass scored vs. what the stronger
+  // confirm pass changed it to. Only present for jobs that cleared the threshold.
+  let rescoreHtml = "";
+  if (rescore) {
+    const d = rescore.delta;
+    const cls = d > 0 ? "up" : d < 0 ? "down" : "flat";
+    const sign = d > 0 ? "+" : "";
+    rescoreHtml = `<div class="rescore-effect">
+      <div class="re-head">
+        <span class="re-label">Confirm-pass re-score</span>
+        <span class="re-move">${rescore.first_score}% <span class="re-arrow">→</span> ${rescore.final_score}%
+          <span class="re-delta ${cls}">${d === 0 ? "no change" : sign + d}</span></span>
+      </div>
+      ${rescore.first_reasoning ? `<div class="re-row"><span class="re-k">Fast pass</span><div>${esc(rescore.first_reasoning)}</div></div>` : ""}
+      ${rescore.final_reasoning ? `<div class="re-row"><span class="re-k">Confirm pass</span><div>${esc(rescore.final_reasoning)}</div></div>` : ""}
+    </div>`;
+  }
   const hasTailored = job.tailored_resume_text || job.tailored_cover_letter_text;
 
   const details = [];
@@ -265,6 +361,7 @@ async function openDrawer(id) {
     <div class="section panelbox">
       <h4>AI match · ${job.match_percentage}%</h4>
       <div>${esc(job.match_reasoning) || "—"}</div>
+      ${rescoreHtml}
     </div>
     ${state.role === "viewer" ? "" : `<div class="drawer-actions">${actions}</div>`}
     ${hasTailored ? `<div class="section"><h4>Tailored resume</h4><div class="panelbox"><pre>${esc(job.tailored_resume_text || "")}</pre></div></div>
@@ -396,6 +493,74 @@ async function loadSettings() {
   state.sourceHealth = health || {};
   renderSources(tp.scrape_sources || []);
   loadSchedule();
+  loadScoring();
+  loadCalibration();
+}
+
+// --- scoring prompts panel -------------------------------------------------
+async function loadScoring() {
+  try {
+    const s = await api("GET", "/api/settings/scoring");
+    state.scoringDefaults = { rubric: s.defaultRubric || "", calibration: s.defaultCalibration || "" };
+    $("#f-scoring-rubric").value = s.rubric || "";
+    $("#f-scoring-calibration").value = s.calibration || "";
+  } catch (e) { /* ignore — panel just stays empty */ }
+}
+async function saveScoring() {
+  $("#scoring-status").textContent = "Saving…";
+  try {
+    const r = await api("PUT", "/api/settings/scoring", {
+      rubric: $("#f-scoring-rubric").value,
+      calibration: $("#f-scoring-calibration").value,
+    });
+    $("#f-scoring-rubric").value = r.rubric || "";
+    $("#f-scoring-calibration").value = r.calibration || "";
+    const allDefault = r.usingDefaultRubric && r.usingDefaultCalibration;
+    $("#scoring-status").textContent = allDefault ? "Saved ✓ (using built-in default)" : "Saved ✓";
+    toast("Scoring prompts updated", "ok");
+    setTimeout(() => ($("#scoring-status").textContent = ""), 3000);
+  } catch (e) { $("#scoring-status").textContent = ""; toast(e.message, "err"); }
+}
+
+// --- auto-calibration panel ------------------------------------------------
+async function loadCalibration() {
+  try { renderCalibration(await api("GET", "/api/calibration")); } catch (e) { /* ignore */ }
+}
+function renderCalibration(data) {
+  const el = $("#calib-proposal"); if (!el) return;
+  const st = data.status || {}, p = data.proposal;
+  const cadence = st.lastRun ? `Last run ${timeAgo(st.lastRun)} · next due in ~${st.daysUntilNext} day(s).` : "Not run yet — next scheduled tick will propose one.";
+  if (!p) { el.innerHTML = `<p class="hint">${cadence} No pending proposal.</p>`; return; }
+  const e = p.eval || {};
+  const gate = e.gatePass ? `<span class="re-delta up">GATE PASS</span>` : `<span class="re-delta down">GATE FAIL</span>`;
+  const arrow = (a, b) => `${a} <span class="re-arrow">→</span> ${b}`;
+  el.innerHTML = `
+    <p class="hint">${cadence}</p>
+    <div class="panelbox" style="margin-top:6px">
+      <div class="re-head" style="margin-bottom:8px">${gate}
+        <span class="hint">proposed ${timeAgo(p.created_at)} · ${esc(p.model || "")}${p.cost != null ? ` · est $${p.cost}` : ""}</span></div>
+      <div class="kv"><span class="k">Accuracy</span><span>label error ${arrow(e.labelErrorCurrent, e.labelErrorProposed)} ${e.improvesAccuracy ? "✓ better" : (e.accWithinNoise ? "≈ within noise" : "✗ worse")} <span class="hint">(lower = closer to your apply/reject calls)</span></span></div>
+      <div class="kv"><span class="k">Spread</span><span>stdev ${arrow(e.spreadCurrent, e.spreadProposed)} ${e.spreadOk ? "✓" : "✗"} <span class="hint">(floor ${e.spreadFloor} — anti-collapse)</span></span></div>
+      <div class="kv"><span class="k">Poles</span><span>${e.polesIntact ? "✓ intact (85+ / ≤15 / hard-cap kept)" : "✗ a pole was lost"}</span></div>
+      <div class="kv"><span class="k">Eval set</span><span>${e.nLabeled} labeled + spread sample = ${e.nEval} jobs</span></div>
+      ${p.rationale ? `<div style="margin-top:8px"><span class="re-label">Opus rationale</span><div style="margin-top:4px">${esc(p.rationale)}</div></div>` : ""}
+      <div style="margin-top:10px"><span class="re-label">Proposed calibration</span>
+        <textarea class="mono" rows="12" readonly style="margin-top:4px">${esc(p.proposedCalibration || "")}</textarea></div>
+      <div class="row" style="margin-top:10px">
+        <button id="btn-calib-adopt" class="btn btn-primary">Adopt proposal</button>
+        <button id="btn-calib-dismiss" class="btn btn-danger">Dismiss</button>
+        <span class="hint">${e.gatePass ? "Passes the eval gate." : "Below the gate — review carefully before adopting."}</span>
+      </div>
+    </div>`;
+  $("#btn-calib-adopt").onclick = async () => {
+    if (!confirm("Adopt these anchors as your live scoring calibration? (You can still edit or reset in Scoring prompts above.)")) return;
+    try { await api("POST", "/api/calibration/adopt"); toast("Calibration adopted ✓", "ok"); loadScoring(); loadCalibration(); }
+    catch (e2) { toast(e2.message, "err"); }
+  };
+  $("#btn-calib-dismiss").onclick = async () => {
+    try { await api("POST", "/api/calibration/dismiss"); toast("Proposal dismissed", "ok"); loadCalibration(); }
+    catch (e2) { toast(e2.message, "err"); }
+  };
 }
 
 // --- schedule & email settings panel --------------------------------------
@@ -504,7 +669,7 @@ function showApplied() { showView("view-applied"); renderApplied(); }
 function showErrors() { showView("view-errors"); loadErrors(); }
 function showRescore() { showView("view-rescore"); loadRescore(); }
 
-// --- Sonnet rescore impact -------------------------------------------------
+// --- Opus rescore impact -------------------------------------------------
 const rescoreSign = (n) => (n > 0 ? "+" + n : "" + n);
 const RESCORE_EDGES = [[-Infinity, -20], [-20, -10], [-10, -1], [-1, 1], [1, 10], [10, 20], [20, Infinity]];
 const RESCORE_BUCKET_LABELS = ["dropped 20+", "dropped 10–20", "dropped 1–10", "unchanged", "rose 1–10", "rose 10–20", "rose 20+"];
@@ -522,7 +687,7 @@ function renderRescore() {
   $("#rescore-count").textContent = s.total ? `· ${s.total} rescored` : "";
   if (!s.total) {
     $("#rescore-summary").innerHTML = "";
-    $("#rescore-chart").innerHTML = `<p class="empty">No Sonnet rescores logged yet. They appear as scrapes (or a board re-score) send jobs above your rescore threshold through Sonnet.</p>`;
+    $("#rescore-chart").innerHTML = `<p class="empty">No Opus rescores logged yet. They appear as scrapes (or a board re-score) send jobs above your rescore threshold through Opus.</p>`;
     $("#rescore-biggest").innerHTML = "";
     return;
   }
@@ -549,7 +714,7 @@ function renderRescore() {
       <text x="${x + bw / 2}" y="${H - 12}" text-anchor="middle" font-size="10" fill="${sel ? "var(--text)" : "var(--muted)"}" style="pointer-events:none">${b.label}</text>`;
   }).join("");
   $("#rescore-chart").innerHTML =
-    `<div class="hint" style="margin-bottom:6px">Score change (Sonnet − Haiku) · click a bar to see those jobs · <span style="color:var(--tier2)">▮</span> lowered &nbsp; <span style="color:var(--tier1)">▮</span> raised</div>
+    `<div class="hint" style="margin-bottom:6px">Score change (Opus − Haiku) · click a bar to see those jobs · <span style="color:var(--tier2)">▮</span> lowered &nbsp; <span style="color:var(--tier1)">▮</span> raised</div>
      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block">${bars}</svg>`;
   $$("#rescore-chart [data-bucket]").forEach((el) => (el.onclick = () => {
     const i = +el.dataset.bucket;
@@ -571,7 +736,7 @@ function renderRescore() {
     const j = findBoardJob(e.job_title, e.company_name);
     const why = `<div class="rescore-why hidden" data-why="${idx}">
         <div class="rw-line"><span class="rw-tag" style="color:var(--muted)">Haiku ${e.first_score}</span> ${esc(e.first_reasoning || "—")}</div>
-        <div class="rw-line"><span class="rw-tag" style="color:${dcol(e.delta)}">Sonnet ${e.final_score}</span> ${esc(e.final_reasoning || "—")}</div>
+        <div class="rw-line"><span class="rw-tag" style="color:${dcol(e.delta)}">Opus ${e.final_score}</span> ${esc(e.final_reasoning || "—")}</div>
         ${j ? `<a class="link rw-open" data-jobid="${j.id}">Open job →</a>` : `<span class="hint">not on board</span>`}
       </div>`;
     return `<div class="rescore-item">
@@ -617,6 +782,10 @@ function renderApplied() {
     ? applied.map(appliedCard).join("")
     : `<p class="empty">No applications yet. Open a job, apply on the company site, then hit “Mark applied” — it shows up here.</p>`;
   $$("#applied-list .card").forEach((c) => (c.onclick = () => openDrawer(c.dataset.id)));
+  // Show the bulk-remove button only when there's something to remove, and never
+  // to read-only viewers (the server enforces that too).
+  const rm = $("#btn-remove-applied");
+  if (rm) rm.classList.toggle("hidden", !(applied.length && state.role !== "viewer"));
 }
 function appliedCard(j) {
   const when = j.applied_at ? `Applied ${timeAgo(j.applied_at)}` : "Applied";
@@ -636,6 +805,15 @@ $("#btn-scrape").onclick = runScrape;
 $("#btn-settings").onclick = showSettings;
 $("#btn-applied").onclick = showApplied;
 $("#btn-applied-back").onclick = showDashboard;
+$("#btn-remove-applied").onclick = async () => {
+  const n = state.jobs.filter((x) => x.status === "APPLIED").length;
+  if (!n || !confirm(`Remove all ${n} applied job${n === 1 ? "" : "s"} from the board? This can't be undone.`)) return;
+  try {
+    const r = await api("DELETE", "/api/jobs/applied");
+    toast(`Removed ${r.removed} applied job${r.removed === 1 ? "" : "s"}`, "ok");
+    await loadJobs(); renderApplied();
+  } catch (e) { toast(e.message, "err"); }
+};
 $("#btn-errors").onclick = showErrors;
 $("#btn-errors-back").onclick = showDashboard;
 $("#btn-rescore-impact").onclick = showRescore;
@@ -659,6 +837,25 @@ $("#btn-errors-clear").onclick = async () => {
 $("#btn-back").onclick = showDashboard;
 $("#btn-save").onclick = saveSettings;
 $("#btn-save-schedule").onclick = saveSchedule;
+$("#btn-save-scoring").onclick = saveScoring;
+$("#btn-reset-scoring").onclick = () => {
+  const d = state.scoringDefaults; if (!d) return;
+  $("#f-scoring-rubric").value = d.rubric || "";
+  $("#f-scoring-calibration").value = d.calibration || "";
+  $("#scoring-status").textContent = "Reset to default — click Save to apply.";
+};
+$("#btn-calib-run").onclick = async () => {
+  const btn = $("#btn-calib-run"); btn.disabled = true;
+  $("#calib-status").textContent = "Running Opus calibration + eval… (~1 min)";
+  try {
+    const r = await api("POST", "/api/calibration/run");
+    if (r.ok) toast("Calibration proposal ready", "ok");
+    else if (r.skipped) toast("Skipped: " + r.skipped, "warn");
+    else if (r.error) toast("Calibration error: " + r.error, "err");
+    await loadCalibration();
+  } catch (e) { toast(e.message, "err"); }
+  finally { btn.disabled = false; $("#calib-status").textContent = ""; }
+};
 $("#btn-scoretest").onclick = async () => {
   const body = {
     job_title: $("#t-title").value, company_name: $("#t-company").value,
@@ -713,15 +910,28 @@ $("#btn-clear").onclick = async () => {
   } catch (e) { toast(e.message, "err"); }
 };
 $("#filter-location").oninput = (e) => { state.filters.location = e.target.value; render(); };
-$("#filter-company").onchange = (e) => { state.filters.company = e.target.value; render(); };
+$("#filter-company-btn").onclick = (e) => { e.stopPropagation(); $("#company-menu").classList.toggle("hidden"); };
+$("#company-menu").onclick = (e) => e.stopPropagation(); // keep menu open while picking
+document.addEventListener("click", () => $("#company-menu")?.classList.add("hidden"));
+$("#company-search").oninput = (e) => { state.companyQuery = e.target.value; syncCompanyOptions(state.jobs); };
+$("#company-clear").onclick = () => {
+  state.filters.companies = []; state.companyQuery = ""; $("#company-search").value = "";
+  syncCompanyOptions(state.jobs); render();
+};
 $("#filter-posted").onchange = (e) => { state.filters.posted = e.target.value; render(); };
 $("#filter-scraped").onchange = (e) => { state.filters.scraped = e.target.value; render(); };
 $("#filter-minscore").oninput = (e) => { state.filters.minScore = e.target.value; render(); };
 $("#filter-sort").onchange = (e) => { state.filters.sort = e.target.value; render(); };
+$("#filter-hide-actioned").onchange = (e) => { state.filters.hideActioned = e.target.checked; render(); };
+$("#salary-min").oninput = () => renderSalaryInsights();
+$("#salary-max").oninput = () => renderSalaryInsights();
 $("#filter-clear").onclick = () => {
-  state.filters = { location: "", company: "", posted: "", scraped: "", minScore: "", sort: "score" };
-  $("#filter-location").value = ""; $("#filter-company").value = ""; $("#filter-posted").value = "";
+  state.filters = { location: "", companies: [], posted: "", scraped: "", minScore: "", sort: "score", hideActioned: true };
+  state.companyQuery = "";
+  $("#filter-location").value = ""; $("#company-search").value = ""; $("#filter-posted").value = "";
   $("#filter-scraped").value = ""; $("#filter-minscore").value = ""; $("#filter-sort").value = "score";
+  $("#filter-hide-actioned").checked = true;
+  syncCompanyOptions(state.jobs);
   render();
 };
 $("#drawer-backdrop").onclick = closeDrawer;

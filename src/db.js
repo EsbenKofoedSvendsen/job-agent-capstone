@@ -198,7 +198,18 @@ export function getJob(id) {
   const log = db
     .prepare("SELECT * FROM job_status_log WHERE job_id = ? ORDER BY created_at DESC")
     .all(id);
-  return { job, log };
+  const rescore = getRescoreForJob(job.job_title, job.company_name);
+  return { job, log, rescore };
+}
+
+// The most recent cascade re-score for a job (matched by title+company, the same
+// dedupe key jobs use). Only jobs that cleared the confirm-pass threshold have one;
+// returns null otherwise so the drawer can conditionally show the before→after.
+export function getRescoreForJob(title, company) {
+  if (!title || !company) return null;
+  return db.prepare(
+    "SELECT first_score, final_score, delta, first_reasoning, final_reasoning, at FROM rescore_log WHERE job_title = ? AND company_name = ? ORDER BY at DESC LIMIT 1"
+  ).get(title, company) || null;
 }
 
 // Set of "title|company" (lowercased) for O(1) in-memory dedupe during scrape.
@@ -321,6 +332,56 @@ export function clearJobs() {
   return n;
 }
 
+// Remove only the jobs the user has already applied to (status APPLIED).
+// FK ON DELETE CASCADE clears their status-log rows automatically.
+export function deleteApplied() {
+  const n = db.prepare("SELECT COUNT(*) c FROM jobs WHERE status = 'APPLIED'").get().c;
+  db.prepare("DELETE FROM jobs WHERE status = 'APPLIED'").run();
+  return n;
+}
+
+// Salary distribution across the board, bucketed by résumé-match level, for a
+// market-value estimate. Reads the stored salary columns only (populate them via
+// the scraper's parseSalary fallback + the backfill script). "band" = median of
+// the low ends and median of the high ends; the p25/median/p75 describe role
+// midpoints.
+export function getSalaryInsights() {
+  const rows = db
+    .prepare(
+      "SELECT match_percentage, salary_min, salary_max FROM jobs " +
+        "WHERE status != 'REJECTED' AND salary_min IS NOT NULL AND salary_max IS NOT NULL AND salary_max >= salary_min"
+    )
+    .all();
+  const total = db.prepare("SELECT COUNT(*) c FROM jobs WHERE status != 'REJECTED'").get().c;
+  const pct = (arr, p) => {
+    if (!arr.length) return null;
+    const s = [...arr].sort((a, b) => a - b);
+    return Math.round(s[Math.floor((s.length - 1) * p)]);
+  };
+  const bucket = (label, minMatch) => {
+    const g = rows.filter((r) => (r.match_percentage || 0) >= minMatch);
+    const mids = g.map((r) => (r.salary_min + r.salary_max) / 2);
+    return {
+      label,
+      min_match: minMatch,
+      n: g.length,
+      median: pct(mids, 0.5),
+      p25: pct(mids, 0.25),
+      p75: pct(mids, 0.75),
+      band_low: pct(g.map((r) => r.salary_min), 0.5),
+      band_high: pct(g.map((r) => r.salary_max), 0.5),
+    };
+  };
+  return {
+    coverage: { with_salary: rows.length, total },
+    buckets: [
+      bucket("Strong match (85+)", 85),
+      bucket("Good match (70+)", 70),
+      bucket("Worth a look (65+)", 65),
+    ],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // App metadata (simple key/value: last-scrape timestamps, etc.)
 // ---------------------------------------------------------------------------
@@ -419,6 +480,81 @@ export function setScheduleSettings(patch) {
   delete next.intervalHours;
   setMeta("schedule_settings", JSON.stringify(next));
   return next;
+}
+
+// Live-editable scoring guidance (the rubric + one-shot calibration examples).
+// Stored as raw override strings; empty string means "use the built-in default"
+// (the defaults live in ai.js so it never has to import them back). Only the
+// admin settings UI writes these.
+export function getScoringSettings() {
+  let s = {};
+  try { const raw = getMeta("scoring_settings"); s = raw ? JSON.parse(raw) : {}; } catch { s = {}; }
+  return {
+    rubric: typeof s.rubric === "string" ? s.rubric : "",
+    calibration: typeof s.calibration === "string" ? s.calibration : "",
+  };
+}
+export function setScoringSettings(patch) {
+  const cur = getScoringSettings();
+  const next = {
+    rubric: typeof patch.rubric === "string" ? patch.rubric : cur.rubric,
+    calibration: typeof patch.calibration === "string" ? patch.calibration : cur.calibration,
+  };
+  setMeta("scoring_settings", JSON.stringify(next));
+  return next;
+}
+
+// Biweekly auto-calibration: a PENDING proposal (new calibration + eval report)
+// that the admin reviews and adopts/dismisses. Only one is held at a time.
+export function getCalibrationProposal() {
+  try { const raw = getMeta("calibration_proposal"); return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
+export function setCalibrationProposal(obj) { setMeta("calibration_proposal", JSON.stringify(obj || {})); return obj; }
+export function clearCalibrationProposal() { setMeta("calibration_proposal", ""); }
+
+// Sonnet-vs-Opus rescore benchmark (populated by the one-shot bench box script:
+// each >70 board job's prior Sonnet-era score/reasoning vs the new Opus score/
+// reasoning). Returns [] until the benchmark table exists. Ordered by |delta|.
+export function getRescoreBenchmark() {
+  try {
+    const rows = db.prepare(
+      `SELECT job_id, job_title, company_name, sonnet_score, sonnet_tier, sonnet_reasoning,
+              opus_score, opus_tier, opus_reasoning, delta, at
+       FROM rescore_benchmark WHERE opus_score IS NOT NULL ORDER BY abs(delta) DESC`
+    ).all();
+    const d = rows.map((r) => r.delta);
+    const summary = {
+      total: rows.length,
+      raised: d.filter((x) => x > 0).length,
+      lowered: d.filter((x) => x < 0).length,
+      unchanged: d.filter((x) => x === 0).length,
+      avgDelta: d.length ? +(d.reduce((a, b) => a + b, 0) / d.length).toFixed(1) : 0,
+      tierChanged: rows.filter((r) => r.sonnet_tier !== r.opus_tier).length,
+    };
+    return { summary, rows };
+  } catch { return { summary: null, rows: [] }; }
+}
+
+// Human ground truth for calibration: the jobs the candidate actually applied to
+// or rejected, with their model score + description. This is the *external* signal
+// that keeps calibration from converging on the model's own mean.
+export function getHumanLabeledJobs() {
+  return db.prepare(
+    `SELECT id, job_title, company_name, location, match_percentage, match_reasoning,
+            substr(job_description_raw, 1, 1500) AS job_description_raw, status
+     FROM jobs WHERE status IN ('APPLIED','REJECTED') ORDER BY status, match_percentage DESC`
+  ).all();
+}
+// A spread sample: the current tails (highest + lowest scored jobs) so the eval can
+// measure whether a proposal preserves dispersion, not just fixes the labeled set.
+export function getSpreadSample(n = 40) {
+  const half = Math.max(1, Math.floor(n / 2));
+  const hi = db.prepare(`SELECT id, job_title, company_name, location, match_percentage,
+      substr(job_description_raw,1,1500) AS job_description_raw FROM jobs ORDER BY match_percentage DESC LIMIT ?`).all(half);
+  const lo = db.prepare(`SELECT id, job_title, company_name, location, match_percentage,
+      substr(job_description_raw,1,1500) AS job_description_raw FROM jobs ORDER BY match_percentage ASC LIMIT ?`).all(half);
+  const seen = new Set();
+  return [...hi, ...lo].filter((j) => (seen.has(j.id) ? false : (seen.add(j.id), true)));
 }
 
 // ---------------------------------------------------------------------------

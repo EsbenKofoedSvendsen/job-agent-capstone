@@ -150,6 +150,18 @@
   .kv { @apply flex gap-3 text-[13px] my-1; }
   .kv .k { @apply text-slate-400 w-[70px] flex-none uppercase text-[11px]; }
   .panelbox { @apply rounded-xl bg-slate-50 border border-slate-200 p-4; }
+  /* Cascade re-score effect inside the AI-match panel */
+  .rescore-effect { @apply mt-3.5 pt-3 border-t border-slate-200; }
+  .re-head { @apply flex items-center gap-2.5 flex-wrap; }
+  .re-label { @apply text-[11px] uppercase tracking-wider text-slate-400 font-semibold; }
+  .re-move { @apply inline-flex items-center gap-2 text-[15px] font-semibold text-slate-900; }
+  .re-arrow { @apply text-slate-400 font-normal; }
+  .re-delta { @apply text-xs font-semibold px-2 py-0.5 rounded-full; }
+  .re-delta.up { @apply text-green-700 bg-green-50; }
+  .re-delta.down { @apply text-red-600 bg-red-50; }
+  .re-delta.flat { @apply text-slate-500 bg-slate-100; }
+  .re-row { @apply flex gap-3 mt-2.5 text-[12.5px] leading-relaxed text-slate-600; }
+  .re-k { @apply text-slate-400 w-[84px] flex-none uppercase text-[11px] pt-px; }
   .drawer pre { @apply whitespace-pre-wrap text-[12.5px] text-slate-600 leading-relaxed max-h-80 overflow-auto m-0; font-family: inherit; }
   .drawer-actions { @apply flex gap-2 mt-5 flex-wrap; }
   .link { @apply text-blue-600 no-underline break-all hover:underline; }
@@ -192,6 +204,14 @@
     resize: vertical;
   }
   textarea:focus, input:focus, select:focus { @apply outline-none border-blue-500 ring-2 ring-blue-100; }
+  .dd { @apply relative; }
+  .dd-menu { @apply absolute left-0 top-full z-40 mt-1 w-72 rounded-lg border border-slate-200 bg-white p-2 shadow-lg flex flex-col; }
+  .dd-menu input { @apply mb-1.5 text-xs; min-width: 0; }
+  .dd-actions { @apply flex items-center justify-between mb-1 px-1; }
+  .dd-list { @apply overflow-y-auto; max-height: 300px; }
+  .dd-item { @apply flex items-center gap-2 rounded px-2 py-1 cursor-pointer select-none hover:bg-slate-50; font-size: 13px; }
+  .dd-item input { @apply m-0; width: auto; min-width: 0; accent-color: var(--primary); }
+  .dd-count { @apply ml-auto text-xs text-slate-400; }
   .sources-list { @apply flex flex-col gap-2 mb-2.5; }
   .source-row { @apply grid gap-1.5 items-center; grid-template-columns: auto 1fr 1.4fr auto; }
   .source-row input { @apply text-xs; }

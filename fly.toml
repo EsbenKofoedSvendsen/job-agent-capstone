@@ -19,13 +19,13 @@ primary_region = 'iad'
   # Lowered from 6/4 to keep peak Chromium memory under the 1GB limit (was OOM-looping).
   SCRAPE_CONCURRENCY = '3'
   PAGE_CONCURRENCY = '2'
-  # Per-task AI models. Cheap Haiku for the high-volume work; Sonnet for the
-  # confirm-pass and tailoring. Jobs the first pass scores ABOVE RESCORE_THRESHOLD
-  # get re-scored by MODEL_RESCORE.
+  # Per-task AI models. Cheap Haiku for the high-volume work; Opus 4.8 for the
+  # confirm-pass (strongest calibration); Sonnet for tailoring. Jobs the first
+  # pass scores ABOVE RESCORE_THRESHOLD get re-scored by MODEL_RESCORE.
   MODEL_EXTRACT = 'claude-haiku-4-5'
   MODEL_SCORE = 'claude-haiku-4-5'
-  MODEL_RESCORE = 'claude-sonnet-4-6'
-  MODEL_TAILOR = 'claude-sonnet-4-6'
+  MODEL_RESCORE = 'claude-opus-5'
+  MODEL_TAILOR = 'claude-sonnet-5'
   RESCORE_THRESHOLD = '70'
 
 [[mounts]]
