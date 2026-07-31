@@ -33,6 +33,19 @@ const safeEq = (a, b) => {
   return crypto.timingSafeEqual(ha, hb);
 };
 
+// Locally, an unset APP_PASSWORD is a deliberate convenience. On a public host
+// it would silently serve the board, the résumé and every tailored document to
+// anyone who knows the URL — and the app name is in fly.toml, so the URL is
+// public. Fail closed: refuse to boot rather than boot without a lock.
+if (process.env.FLY_APP_NAME && !config.appPassword) {
+  console.error(
+    `[auth] FATAL: APP_PASSWORD is unset on hosted instance "${process.env.FLY_APP_NAME}". ` +
+    `Refusing to start with authentication disabled. Set it with:\n` +
+    `  flyctl secrets set APP_PASSWORD=... -a ${process.env.FLY_APP_NAME}`
+  );
+  process.exit(1);
+}
+
 if (config.appPassword) {
   app.use((req, res, next) => {
     const [, b64 = ""] = (req.headers.authorization || "").split(" ");

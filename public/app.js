@@ -19,6 +19,10 @@ async function api(method, url, body) {
 }
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const splitList = (s) => String(s || "").split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
+// Apply URLs come from scraped third-party pages. esc() stops attribute
+// breakout but not the scheme, so a "javascript:" URL would still render as a
+// clickable link. Only http(s) is allowed to become an href.
+const safeUrl = (u) => (/^https?:\/\//i.test(String(u ?? "")) ? String(u) : "");
 
 function timeAgo(iso) {
   if (!iso) return "";
@@ -339,7 +343,10 @@ async function openDrawer(id) {
   if (fmtSalary(job)) details.push(["Salary", esc(fmtSalary(job))]);
   if (job.posted_at || job.posted_at_raw) details.push(["Posted", esc(job.posted_at ? timeAgo(job.posted_at) : job.posted_at_raw)]);
   if (job.scraped_at) details.push(["Scraped", `${esc(timeAgo(job.scraped_at))} <span class="hint">(${esc(new Date(job.scraped_at).toLocaleString())})</span>`]);
-  if (job.job_url) details.push(["Apply", `<a class="link" href="${esc(job.job_url)}" target="_blank" rel="noopener">${esc(job.job_url)}</a>`]);
+  const applyUrl = safeUrl(job.job_url);
+  if (job.job_url) details.push(["Apply", applyUrl
+    ? `<a class="link" href="${esc(applyUrl)}" target="_blank" rel="noopener">${esc(applyUrl)}</a>`
+    : `<span class="hint">${esc(job.job_url)}</span>`]);
 
   let actions = "";
   if (terminal) {
@@ -347,7 +354,7 @@ async function openDrawer(id) {
                <button class="btn btn-danger" data-act="delete">Delete</button>`;
   } else {
     actions = `<button class="btn" data-act="tailor">${hasTailored ? "↻ Re-tailor" : "✦ Tailor"}</button>
-      ${job.job_url ? `<a class="btn" href="${esc(job.job_url)}" target="_blank" rel="noopener">↗ Open apply page</a>` : ""}
+      ${applyUrl ? `<a class="btn" href="${esc(applyUrl)}" target="_blank" rel="noopener">↗ Open apply page</a>` : ""}
       <button class="btn" data-act="markapplied">✓ Mark applied</button>
       <button class="btn btn-danger" data-act="reject">✕ Reject</button>`;
   }
